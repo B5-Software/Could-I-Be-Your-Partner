@@ -95,6 +95,16 @@ test('mouse selection scrolls downward at the lower edge and never includes the 
   assert.equal(app.state.selection, null, 'Reflow invalidates old display columns');
 });
 
+test('the mouse scroll-to-bottom button returns to the most recent transcript line', async () => {
+  const { app } = await makeApp();
+  app._scroll(15);
+  const hit = app.frame().hits.scrollBottom;
+  assert.ok(hit);
+  await app.handleKey(mouse(hit.from, hit.row));
+  assert.equal(app.state.scrollOffset, 0);
+  assert.equal(app.frame().hits.scrollBottom, undefined);
+});
+
 test('SGR mouse drag is distinguishable from a new click, including chunked input', () => {
   const decoder = createKeyDecoder();
   assert.deepEqual(decoder.push('\x1b[<32;5;'), []);
@@ -127,7 +137,7 @@ test('brand art is shared by GUI/TUI, visible on new sessions and VM boot, and f
   const { app } = await makeApp();
   await app.newSession('chat');
   assert.equal(app.state.messages[0].kind, 'brand');
-  assert.ok(stripAnsi(app.frame().lines.join('\n')).includes('____'));
+  assert.ok(stripAnsi(app.frame().lines.join('\n')).includes('██████╗'));
   for (const width of [20, 35, 90])
     for (const height of [8, 15, 24]) {
       app.resize(width, height);
@@ -137,7 +147,7 @@ test('brand art is shared by GUI/TUI, visible on new sessions and VM boot, and f
       assert.ok(frame.lines.every((line) => visibleWidth(line) <= width));
       assert.ok(
         stripAnsi(frame.lines.join('\n')).includes(
-          width < 35 || height < 15 ? 'C I B Y P' : '____',
+          width < 35 || height < 15 ? 'C I B Y P' : '████╗',
         ),
       );
     }

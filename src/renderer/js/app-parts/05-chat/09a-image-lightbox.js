@@ -55,7 +55,7 @@
     document.getElementById('btn-img-zoom-reset')?.addEventListener('click', () => {
       if (imagePreviewState.fit) _actualSize(); else _fitImage();
     });
-    document.getElementById('btn-img-download')?.addEventListener('click', () => { if (imagePreviewState.src) saveChatImage(imagePreviewState.src); });
+    document.getElementById('btn-img-download')?.addEventListener('click', () => { if (imagePreviewState.src) saveChatImage(imagePreviewState.src, imagePreviewState.path); });
     document.getElementById('btn-img-copy')?.addEventListener('click', () => { if (imagePreviewState.src) copyChatImage(imagePreviewState.src); });
     document.getElementById('btn-img-folder')?.addEventListener('click', () => openImageInFolder(imagePreviewState.path || imagePreviewState.src));
     // 滚轮缩放（以光标为锚点）
@@ -100,10 +100,11 @@
     const title = document.getElementById('image-preview-title');
     imagePreviewState.src = src;
     imagePreviewState.path = opts.path || localPathFromUrl(src) || '';
-    if (img) { img.src = src; img.alt = '预览'; }
+    const preview = t('ui.image.preview', '图片预览');
+    if (img) { img.src = src; img.alt = preview; }
     if (title) {
       const name = imagePreviewState.path ? imagePreviewState.path.split(/[\\/]/).pop() : '';
-      title.textContent = name ? `图片预览 · ${name}` : '图片预览';
+      title.textContent = name ? preview + ' · ' + name : preview;
     }
     _bindImagePreviewOnce();
     imagePreviewModal.classList.remove('hidden');

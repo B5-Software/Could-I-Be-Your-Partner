@@ -96,6 +96,7 @@ const FS_ROUTES = {
   'fs:writeFile': (v, a) => v.writeFile(a[0], a[1], a[2]),
   'fs:createFile': (v, a) => v.createFile(a[0], a[1], a[2]),
   'fs:getFileInfo': (v, a) => v.getFileInfo(a[0]),
+  'fs:presentableFile': (v, a) => v.presentableFile(a[0]),
   'fs:convertFileEncoding': (v, a) => v.convertFileEncoding(a[0], a[1]),
   'fs:deleteFile': (v, a) => v.deleteFile(a[0]),
   'fs:moveFile': (v, a) => v.moveFile(a[0], a[1]),
@@ -252,6 +253,11 @@ function createRoutedHandler(channel, original, deps) {
     return async (_e, ...args) => {
       if (!deps.isLocationVm()) return original(_e, ...args);
       try {
+        if (channel === 'fs:localSearch' || channel === 'fs:searchInFiles')
+          args[2] = {
+            ...args[2],
+            restrictDiskScan: deps.getSettings?.()?.agent?.restrictDiskScan !== false,
+          };
         const r = await fsImpl(vmFs, args);
         // 外部挂载目录：写入/删除后把 VM 新状态拉回宿主镜像（文件树/ESLint/资源管理器读宿主镜像）
         const idxs = PULL_AFTER_INDEX[channel];

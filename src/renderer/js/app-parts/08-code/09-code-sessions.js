@@ -83,28 +83,36 @@
     return createCodeSession(null, false);
   }
 
-  async function replayCodeSession(session) {
+  async function replayCodeSession(session, opts = {}) {
     const msgsEl = document.getElementById('code-chat-messages');
-    if (!msgsEl || !session?.agent) return;
-    codeStreamBubble = null;
+    if (!msgsEl || !session?.agent) return false;
+    if (typeof clearCodeStreamBubble === 'function') clearCodeStreamBubble();
+    else codeStreamBubble = null;
     msgsEl.innerHTML = '';
     WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#code-chat-messages' });
     const messages = session.agent.contextManager?.getHistoryMessages() || [];
     const total = messages.length;
     const chunkSize = 40;
     const toolCallMap = {};
-    if (total === 0) {
+    const activeStream = session.agent._activeStream || null;
+    const unadmittedInput = session.agent._unadmittedInput || null;
+    const hasLive = Boolean(activeStream || unadmittedInput || session.agent.running);
+    const codeGeneration = (window.__codeReplayGeneration = (window.__codeReplayGeneration || 0) + 1);
+    const isCancelled = () =>
+      window.__codeReplayGeneration !== codeGeneration || (opts.cancelCheck ? opts.cancelCheck() : false);
+    if (total === 0 && !hasLive) {
       msgsEl.innerHTML = `<div class="welcome-message code-agent-welcome"><i class="fa-solid fa-code"></i><h2>一起完成编程任务</h2><p>描述需求，或在编辑器中选中代码。AI 会结合当前工作区帮你修改、测试和审查。</p></div>`;
-      return;
+      return true;
     }
-    showHistoryProgress(total);
+    const needChunking = total > chunkSize;
+    if (needChunking) showHistoryProgress(total);
     try {
       for (let start = 0; start < total; start += chunkSize) {
+        if (isCancelled()) return false;
         const end = Math.min(total, start + chunkSize);
         for (let i = start; i < end; i++) {
           const msg = messages[i];
           if (!msg || msg.metadata?.kind === 'context-update') continue;
-          if (msg.metadata?.kind === 'context-update') continue;
           if (msg.role === 'user') {
             addCodeMessage('user', msg, false);
           } else if (msg.role === 'assistant') {
@@ -133,18 +141,30 @@
               const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
               addCodeMessage('system', `[工具结果] ${msg.name || 'tool'}: ${resultStr.slice(0, 200)}`, false);
             }
-          } else if (msg.role === 'system') {
+          } else if (msg.role === 'system' && msg.metadata?.type !== 'error') {
             addCodeMessage('system', typeof msg.content === 'string' ? msg.content : String(msg.content || ''), false);
           }
         }
-        updateHistoryProgress(end, total, end >= total ? '渲染完成，正在收尾…' : `已渲染 ${end}/${total} 条消息`);
-        await yieldHistoryUI();
+        if (needChunking) {
+          updateHistoryProgress(end, total, end >= total ? '渲染完成，正在收尾…' : `已渲染 ${end}/${total} 条消息`);
+          await yieldHistoryUI();
+        }
+      }
+      if (isCancelled()) return false;
+      if (unadmittedInput && (unadmittedInput.text || unadmittedInput.attachments?.length)) {
+        addCodeMessage('user', unadmittedInput.text || '', false, unadmittedInput.attachments || []);
+      }
+      if (activeStream && typeof restoreCodeStreamBubble === 'function') {
+        restoreCodeStreamBubble(activeStream);
       }
     } finally {
-      hideHistoryProgress();
+      if (needChunking) hideHistoryProgress();
     }
     requestAnimationFrame(() => {
-      scrollChatToBottom(msgsEl);
+      if (isCancelled()) return;
+      if (typeof window.forceScrollToBottom === 'function') window.forceScrollToBottom(msgsEl);
+      else scrollChatToBottom(msgsEl);
       WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#code-chat-messages', html: msgsEl.innerHTML });
     });
+    return true;
   }

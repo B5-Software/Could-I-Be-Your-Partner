@@ -36,8 +36,12 @@
       return;
     }
 
+    const targetAgent = agent;
+    const chatSession = sessionManager?.getByAgent(targetAgent);
+    const isTargetActive = () => !chatSession || chatSession.active;
+
     // 热对话：Agent工作中时注入新消息
-    if (agent.running) {
+    if (targetAgent.running) {
       chatInput.value = '';
       chatInput.style.height = 'auto';
       WebUIMirror.pushDomEvent({ type: 'dom_value', selector: '#chat-input', value: '' });
@@ -46,7 +50,7 @@
       const attachments = [...currentAttachments];
       clearAttachments();
 
-      addMessageToChat('user', text, attachments);
+      if (isTargetActive()) addMessageToChat('user', text, attachments);
 
       await copyAttachmentsToWorkspace(attachments);
 
@@ -62,9 +66,9 @@
           const officeFormats = ['docx', 'xlsx', 'pptx', 'doc', 'xls', 'ppt', 'pdf', 'odt', 'ods', 'odp'];
           if (officeFormats.includes(ext)) {
             try {
-              const importResult = await window.api.knowledgeImportFile(att.path, agent.workspacePath);
+              const importResult = await window.api.knowledgeImportFile(att.path, targetAgent.workspacePath);
               if (importResult.ok && importResult.content) {
-                const workspacePath = agent.workspacePath;
+                const workspacePath = targetAgent.workspacePath;
                 if (workspacePath) {
                   const textFileName = att.name.replace(/\.\w+$/, '.txt');
                   const textFilePath = `${workspacePath}\\${textFileName}`;
@@ -87,29 +91,31 @@
         }
       }
 
-      agent.injectHotMessage(text, attachments);
+      targetAgent.injectHotMessage(text, attachments);
       return;
     }
 
-    const chatSession = sessionManager?.getByAgent(agent);
-    if (chatSession && !agent.running && !sessionManager.requestStart(chatSession)) {
+    if (chatSession && !targetAgent.running && !sessionManager.requestStart(chatSession)) {
       const queuedAttachments = [...currentAttachments];
       clearAttachments();
-      addMessageToChat('user', text, queuedAttachments);
+      if (isTargetActive()) addMessageToChat('user', text, queuedAttachments);
       sessionManager.queue(chatSession, { text, attachments: queuedAttachments });
-      addSystemMessage('当前并发会话较多，本消息已排队，有空闲槽位后会自动开始。', { persist: false });
+      if (isTargetActive()) addSystemMessage('当前并发会话较多，本消息已排队，有空闲槽位后会自动开始。', { persist: false });
       return;
     }
 
     // 正常发送（Agent空闲时）
 
     // Show stop button immediately
-    setSendButtons(true);
+    if (isTargetActive()) setSendButtons(true);
 
     const limitCheck = await window.api.budgetCheck();
     if (limitCheck.exceeded && limitCheck.action !== 'warn') {
-      addSystemMessage(limitCheck.kind === 'tokens' ? '今日 Token 用量已达上限；请到设置 → 消费与用量上限调整。' : 'LLM 消费已达预算上限；请到设置 → 消费与用量上限调整。');
-      setSendButtons(false); return;
+      if (isTargetActive()) {
+        addSystemMessage(limitCheck.kind === 'tokens' ? '今日 Token 用量已达上限；请到设置 → 消费与用量上限调整。' : 'LLM 消费已达预算上限；请到设置 → 消费与用量上限调整。');
+        setSendButtons(false);
+      }
+      return;
     }
 
     chatInput.value = '';
@@ -122,8 +128,10 @@
     clearAttachments();
 
     // Show message with attachment indicators
-    addMessageToChat('user', text, attachments);
-    addThinkingIndicator();
+    if (isTargetActive()) {
+      addMessageToChat('user', text, attachments);
+      addThinkingIndicator();
+    }
     window.api.webControlPushMessage('user', text);
 
     await copyAttachmentsToWorkspace(attachments);
@@ -144,10 +152,10 @@
         const officeFormats = ['docx', 'xlsx', 'pptx', 'doc', 'xls', 'ppt', 'pdf', 'odt', 'ods', 'odp'];
         if (officeFormats.includes(ext)) {
           try {
-            const importResult = await window.api.knowledgeImportFile(att.path, agent.workspacePath);
+            const importResult = await window.api.knowledgeImportFile(att.path, targetAgent.workspacePath);
             if (importResult.ok && importResult.content) {
               // 将转换后的文本保存到工作目录
-              const workspacePath = agent.workspacePath;
+              const workspacePath = targetAgent.workspacePath;
               if (workspacePath) {
                 const textFileName = att.name.replace(/\.\w+$/, '.txt');
                 const textFilePath = `${workspacePath}\\${textFileName}`;
@@ -172,8 +180,8 @@
     }
 
     try {
-      await agent.sendMessage(text, attachments);
+      await targetAgent.sendMessage(text, attachments);
     } finally {
-      removeThinkingIndicator();
+      if (isTargetActive()) removeThinkingIndicator();
     }
   }

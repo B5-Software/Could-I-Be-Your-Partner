@@ -35,20 +35,15 @@
       listEl.querySelectorAll('.history-continue').forEach(btn => {
         btn.addEventListener('click', async (e) => {
           e.stopPropagation();
-          stopVoicePlayback(); // 切换会话前清空语音播放队列
           const id = btn.dataset.id;
           const existing = sessionManager ? sessionManager.list('babe').find(s => String(s.id) === String(id)) : null;
           if (existing) {
-            babeAgent = existing.agent;
-            const conversation = await window.api.babeHistoryGet(id);
-            if (conversation) {
-              await babeAgent.loadFromHistory(conversation);
-              sessionManager.retag(existing, id);
-            }
-            activateSession('babe', existing.key);
-          } else {
-            await loadBabeConversation(id);
+            await activateSession('babe', existing.key);
+            document.querySelector('.nav-item[data-page="babe"]')?.click();
+            return;
           }
+          stopVoicePlayback(); // 切换会话前清空语音播放队列
+          await loadBabeConversation(id);
         });
       });
       listEl.querySelectorAll('.history-delete').forEach(btn => {

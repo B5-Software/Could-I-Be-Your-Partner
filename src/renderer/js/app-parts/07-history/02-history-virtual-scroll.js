@@ -164,37 +164,24 @@
     const id = item.id;
 
     if (action === 'continue') {
+      const existing = sessionManager ? sessionManager.list('chat').find(s => String(s.id) === String(id)) : null;
+      if (existing) {
+        await activateSession('chat', existing.key);
+        navigatePage('chat');
+        return;
+      }
       stopVoicePlayback();
       const conv = await window.api.historyGet(id);
       if (!conv) return;
-      const existing = sessionManager ? sessionManager.list('chat').find(s => String(s.id) === String(conv.id)) : null;
-      if (existing) {
-        agent = existing.agent;
-        activateSession('chat', existing.key);
-      } else {
-        const ag = new Agent();
-        ag.mode = 'chat';
-        await ag.init();
-        await ag.loadFromHistory(conv);
-        wireChatAgent(ag);
-        const target = sessionManager.registerAgent('chat', ag, { id: conv.id, title: conv.title || '未命名对话' });
-        agent = ag;
-        activateSession('chat', target.key);
-      }
-      setTitlebarTitle(agent.conversationTitle || '未命名对话');
-      updateContextProgress();
+      const ag = new Agent();
+      ag.mode = 'chat';
+      await ag.init();
+      await ag.loadFromHistory(conv);
+      wireChatAgent(ag);
+      const target = sessionManager.registerAgent('chat', ag, { id: conv.id, title: conv.title || '未命名对话' });
+      agent = ag;
+      await activateSession('chat', target.key, { force: true });
       navigatePage('chat');
-      chatMessages.innerHTML = '';
-      if (typeof VirtualScroller !== 'undefined') VirtualScroller.reset();
-      if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchStart();
-      WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#chat-messages' });
-      WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
-      const chatGeneration = (window.__chatReplayGeneration = (window.__chatReplayGeneration || 0) + 1);
-      await replayHistoryMessages(conv.messages || [], {
-        cancelCheck: () => window.__chatReplayGeneration !== chatGeneration
-      });
-      if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchEnd();
-      if (typeof window.forceScrollToBottom === 'function') window.forceScrollToBottom(chatMessages);
     } else if (action === 'open-workspace') {
       const conv = await window.api.historyGet(id);
       if (conv?.workspacePath) {

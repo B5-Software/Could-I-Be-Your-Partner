@@ -28,6 +28,15 @@
         btn.classList.add('active');
         currentMode = mode;
         if (typeof showSessionTabsForMode === 'function') showSessionTabsForMode(mode);
+        const consumeTarget = (targetMode) => {
+          const pending = window.__pendingModeTargetKey;
+          if (pending && pending.mode === targetMode) {
+            window.__pendingModeTargetKey = null;
+            const exact = sessionManager?.get(pending.key);
+            if (exact && exact.mode === targetMode) return exact;
+          }
+          return resolveModeTarget(targetMode);
+        };
         if (mode === 'chat') {
           // Show chat sidebar items, hide code/babe ones
           document.querySelector('.nav-item[data-page="chat"]')?.classList.remove('hidden');
@@ -40,8 +49,8 @@
           document.querySelector('.nav-item[data-page="chat"]')?.click();
           if (typeof renderSessionTabs === 'function') renderSessionTabs('chat');
           if (sessionManager) {
-            const target = resolveModeTarget('chat');
-            if (target) activateSession('chat', target.key);
+            const target = consumeTarget('chat');
+            if (target) activateSession('chat', target.key, { force: true });
           }
         } else if (mode === 'code') {
           // Code mode: show code sidebar items, hide chat/babe ones
@@ -55,8 +64,8 @@
           document.querySelector('.nav-item[data-page="code"]')?.click();
           if (typeof renderSessionTabs === 'function') renderSessionTabs('code');
           if (sessionManager) {
-            const target = resolveModeTarget('code');
-            if (target) activateSession('code', target.key);
+            const target = consumeTarget('code');
+            if (target) activateSession('code', target.key, { force: true });
           }
         } else if (mode === 'babe') {
           // Babe mode: show babe sidebar items, hide chat/code ones
@@ -72,8 +81,8 @@
           initBabeAgent();
           if (typeof renderSessionTabs === 'function') renderSessionTabs('babe');
           if (sessionManager) {
-            const target = resolveModeTarget('babe');
-            if (target) activateSession('babe', target.key);
+            const target = consumeTarget('babe');
+            if (target) activateSession('babe', target.key, { force: true });
           }
         }
         // 切换模式后同步标题栏为目标模式当前对话标题（无则显示"未命名对话"）

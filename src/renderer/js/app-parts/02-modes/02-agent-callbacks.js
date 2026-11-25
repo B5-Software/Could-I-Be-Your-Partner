@@ -60,9 +60,7 @@
         break;
       case 'error':
         if (!isActive()) break;
-        // 错误消息已被 agent.js 持久化到 contextManager，这里只负责 UI 显示
-        addSystemMessage(`[错误] ${data}`, { persist: false });
-        window.api.webControlPushMessage('system', `[错误] ${data}`);
+        showToast(data?.message || String(data), 'error');
         break;
       case 'optimize-tools-start':
         if (!isActive()) break;

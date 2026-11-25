@@ -5,8 +5,8 @@ const path = require('node:path');
 const os = require('node:os');
 const { VmFs } = require('../vm/vm-fs');
 function registerFrontendFilePicker({ ipcMain, vmService, getSettings }) {
-  function io() {
-    const vm = require('../vm/tool-location').isVmOperation(() => vmService);
+  function io(hostDirectory = false) {
+    const vm = !hostDirectory && require('../vm/tool-location').isVmOperation(() => vmService);
     if (vm)
       return {
         vm,
@@ -39,7 +39,10 @@ function registerFrontendFilePicker({ ipcMain, vmService, getSettings }) {
     };
   }
   ipcMain.handle('filePicker:prepare', async (_event, save, options = {}) => {
-    const target = io();
+    const directoryOnly =
+      options.directory === true || (options.properties || []).includes('openDirectory');
+    const hostDirectory = !save && directoryOnly && options.hostDirectory === true;
+    const target = io(hostDirectory);
     let directory = target.normalize(
       options.defaultPath || (target.vm ? '/workspace' : os.homedir()),
     );
@@ -47,7 +50,8 @@ function registerFrontendFilePicker({ ipcMain, vmService, getSettings }) {
       directory = target.path.dirname(directory);
     return {
       save: !!save,
-      directory: (options.properties || []).includes('openDirectory'),
+      directory: directoryOnly,
+      hostDirectory,
       initial: directory.replace(/\\/g, '/'),
       filename: save ? target.path.basename(options.defaultPath || 'untitled') : '',
       title: options.title || (save ? '保存文件' : '打开文件'),
@@ -55,9 +59,9 @@ function registerFrontendFilePicker({ ipcMain, vmService, getSettings }) {
       theme: getSettings().theme || {},
     };
   });
-  ipcMain.handle('filePicker:browse', async (_event, raw) => {
+  ipcMain.handle('filePicker:browse', async (_event, raw, hostDirectory = false) => {
     try {
-      const target = io(),
+      const target = io(hostDirectory === true),
         directory = target.normalize(raw);
       return { ...(await target.fs.listDirectory(directory)), path: directory.replace(/\\/g, '/') };
     } catch (error) {
@@ -104,7 +108,7 @@ function registerFrontendFilePicker({ ipcMain, vmService, getSettings }) {
   });
   ipcMain.handle('filePicker:validate', async (_event, raw, config, overwrite) => {
     try {
-      const target = io(),
+      const target = io(config.hostDirectory === true && config.directory && !config.save),
         file = target.normalize(raw),
         stat = await target.fs.stat(file).catch(() => null);
       if (config.save) {

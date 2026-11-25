@@ -37,27 +37,27 @@
         }).join('');
         listEl.querySelectorAll('.history-continue').forEach(btn => {
           btn.addEventListener('click', async () => {
-            stopVoicePlayback(); // 切换会话前清空语音播放队列
             const id = btn.dataset.id;
+            let session = sessionManager ? sessionManager.list('code').find(s => String(s.id) === String(id)) : null;
+            if (session) {
+              codeCurrentHistoryId = id;
+              await activateSession('code', session.key);
+              document.querySelector('.nav-item[data-page="code"]')?.click();
+              return;
+            }
+            stopVoicePlayback(); // 切换会话前清空语音播放队列
             const loadRes = await window.api.codeLoadHistory(codeWorkspacePath, id);
             if (loadRes.ok && loadRes.data) {
               codeCurrentHistoryId = id;
               const conv = loadRes.data;
-              let session = sessionManager ? sessionManager.list('code').find(s => String(s.id) === String(id)) : null;
-              if (session) {
-                codeAgent = session.agent;
-                await codeAgent.loadFromHistory(conv);
-                sessionManager.retag(session, id);
-                activateSession('code', session.key);
-              } else {
-                session = await createCodeSession();
-                if (!session) return;
-                codeAgent = session.agent;
-                await codeAgent.loadFromHistory(conv);
-                sessionManager.retag(session, id);
-              }
-              codeMessages = codeAgent.contextManager.getHistoryMessages().slice();
-              await replayCodeSession(session);
+              session = await createCodeSession(null, false);
+              if (!session) return;
+              codeAgent = session.agent;
+              await codeAgent.loadFromHistory(conv);
+              session.id = String(id);
+              session.title = conv.title || session.title;
+              if (!window.CibypBackendViews) sessionManager.retag(session, id);
+              await activateSession('code', session.key, { force: true });
               document.querySelector('.nav-item[data-page="code"]')?.click();
             }
           });

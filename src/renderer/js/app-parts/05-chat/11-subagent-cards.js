@@ -1,5 +1,12 @@
   const _subAgentCards = new Map(); // id → { el, logEl, startTime, timer }
 
+  function clearSubAgentCards() {
+    for (const rec of _subAgentCards.values()) {
+      if (rec?.timer) clearInterval(rec.timer);
+    }
+    _subAgentCards.clear();
+  }
+
   function addSubAgentCard({ id, title, task, startTime, status }) {
     const el = document.createElement('div');
     el.className = 'sub-agent-card';

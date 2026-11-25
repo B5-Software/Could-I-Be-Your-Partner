@@ -59,7 +59,15 @@ module.exports = function registerWorkspacesIpc({
   ]) {
     ipcMain.handle(channel, async (_, ...args) => {
       try {
-        return await workspaceLifecycle[action](...args);
+        const result = await workspaceLifecycle[action](...args);
+        if (
+          result.method === 'initial-rename' &&
+          getSettings().workspace?.lastWorkspace === args[0]
+        ) {
+          getSettings().workspace.lastWorkspace = result.path;
+          scheduleSettingsPersist();
+        }
+        return result;
       } catch (error) {
         return { ok: false, error: error.message };
       }
@@ -359,27 +367,55 @@ module.exports = function registerWorkspacesIpc({
             .join('');
         return { ok: true, tree: render(nodes), source: 'vm' };
       }
-      const tree = generateFileTree(dirPath, '', 0, 3); // 最多3层
+      const tree = await generateFileTree(dirPath, '', 0, 3); // 最多3层
       return { ok: true, tree };
     } catch (e) {
       return { ok: false, error: e.message };
     }
   });
 
-  function generateFileTree(dir, prefix, depth, maxDepth) {
-    if (depth >= maxDepth) return '';
+  const TREE_SKIP_DIRS = new Set([
+    'node_modules',
+    '.git',
+    '.hg',
+    '.svn',
+    'dist',
+    'build',
+    '.next',
+    '.cache',
+    '__pycache__',
+    '.venv',
+    'venv',
+  ]);
+
+  async function generateFileTree(dir, prefix, depth, maxDepth, budget = { left: 160 }) {
+    if (depth >= maxDepth || budget.left <= 0) return '';
     try {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      const entries = (await fs.promises.readdir(dir, { withFileTypes: true })).filter(
+        (e) => !(e.isDirectory() && TREE_SKIP_DIRS.has(e.name)),
+      );
       let result = '';
-      entries.forEach((entry, i) => {
+      for (let i = 0; i < entries.length; i++) {
+        if (budget.left <= 0) {
+          result += prefix + '└── …\n';
+          break;
+        }
+        budget.left--;
+        const entry = entries[i];
         const isLast = i === entries.length - 1;
         const connector = isLast ? '└── ' : '├── ';
         const newPrefix = prefix + (isLast ? '    ' : '│   ');
         result += prefix + connector + entry.name + (entry.isDirectory() ? '/\n' : '\n');
         if (entry.isDirectory() && depth < maxDepth - 1) {
-          result += generateFileTree(path.join(dir, entry.name), newPrefix, depth + 1, maxDepth);
+          result += await generateFileTree(
+            path.join(dir, entry.name),
+            newPrefix,
+            depth + 1,
+            maxDepth,
+            budget,
+          );
         }
-      });
+      }
       return result;
     } catch {
       return '';
@@ -445,7 +481,7 @@ module.exports = function registerWorkspacesIpc({
 
   // ---- IPC: Code Mode (workspace + per-workspace history) ----
   // Code mode history is stored per-workspace to prevent cross-contamination.
-  function getCodeHistoryDir(workspacePath) {
+  function getCodeHistoryDir(workspacePath, create = true) {
     if (!workspacePath) return null;
     // Store history inside the workspace itself in a .cibyp-code-history folder
     const histDir = require('../vm/tool-location').isVmOperation(() => vmService)
@@ -456,13 +492,36 @@ module.exports = function registerWorkspacesIpc({
           require('node:crypto').createHash('sha256').update(workspacePath).digest('hex'),
         )
       : path.join(workspacePath, '.cibyp-code-history');
-    try {
-      fs.mkdirSync(histDir, { recursive: true });
-    } catch {
-      /* ignore */
+    if (create) {
+      try {
+        fs.mkdirSync(histDir, { recursive: true });
+      } catch {
+        /* ignore */
+      }
     }
     return histDir;
   }
+  ipcMain.handle('code:listHistoryRoots', async () => {
+    const known = [
+      ...new Set(
+        [
+          getSettings().codeMode?.lastWorkspace,
+          ...activeWorkspaces(),
+          ...Object.keys(workspaceLifecycle.records),
+        ].filter(Boolean),
+      ),
+    ];
+    const found = [];
+    for (const workspace of known) {
+      const directory = getCodeHistoryDir(workspace, false);
+      try {
+        if ((await fs.promises.stat(directory)).isDirectory()) found.push(workspace);
+      } catch {
+        /* History may have been moved or deleted. */
+      }
+    }
+    return found;
+  });
 
   ipcMain.handle('code:openWorkspace', async () => {
     const result = await dialog.showOpenDialog(getMainWindow(), {
@@ -567,7 +626,7 @@ module.exports = function registerWorkspacesIpc({
         // 记录创建时的运行位置（主机/虚拟机），供跨模式继续会话时做同步护栏
         data.__runtimeLocation =
           (getSettings().runtime && getSettings().runtime.location) === 'vm' ? 'vm' : 'host';
-        _externalizeHistoryImages(data);
+        data = _externalizeHistoryImages(data);
       }
       queueHistorySave('code:' + id, dataPath(histDir, id, '.json'), data, options);
       if (data && typeof data === 'object') {

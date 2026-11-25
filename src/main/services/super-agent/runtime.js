@@ -6,10 +6,20 @@ class RuntimeAdapter {
     this.service = service;
     this.keys = new Set();
   }
-  async session(key, role, config, mode = 'chat') {
+  async session(key, role, config, mode = 'chat', workspacePath = '') {
     let s = this.runtime.sessions.get(key);
     if (!s) {
-      s = this.runtime.createSession({ key, mode, profile: 'superagent-' + role });
+      s = this.runtime.createSession({
+        key,
+        mode,
+        profile: 'superagent-' + role,
+        ...(workspacePath
+          ? {
+              workspacePath,
+              codeWorkspacePath: mode === 'code' ? workspacePath : null,
+            }
+          : {}),
+      });
       this.keys.add(key);
     }
     await this.runtime.initialize({ key });
@@ -41,13 +51,17 @@ class RuntimeAdapter {
             totalChars: e.text.length,
             ...(e.text.length > 800 ? { readMore: e.id } : {}),
           })),
-          existingTasks: tasks.map(({ id, title, scope, status, summary }) => ({
-            id,
-            title,
-            scope,
-            status,
-            summary: summary.slice(0, 160),
-          })),
+          existingTasks: tasks.map(
+            ({ id, title, scope, mode, workspacePath, status, summary }) => ({
+              id,
+              title,
+              scope,
+              mode,
+              ...(workspacePath ? { workspacePath } : {}),
+              status,
+              summary: summary.slice(0, 160),
+            }),
+          ),
         }),
       );
       if (!result.ok) throw Error(result.error);
@@ -57,15 +71,33 @@ class RuntimeAdapter {
   }
   async run(task, events, config, checkpoint) {
     const existing = this.runtime.sessions.has(task.workerKey);
-    const s = await this.session(task.workerKey, 'worker', config, task.mode);
-    if (task.workspacePath && s.agent.workspacePath !== task.workspacePath) {
-      const changed = await this.runtime.setWorkspace(task.workerKey, task.workspacePath);
+    const runtimeSettings = await this.runtime.getSettings();
+    const isVm = runtimeSettings?.runtime?.location === 'vm';
+    let targetWorkspace = task.workspacePath || '';
+    // If a task was mounted from a host folder in VM mode and later resumed in Host mode,
+    // use its hostWorkspacePath so host execution works seamlessly.
+    if (
+      !isVm &&
+      targetWorkspace &&
+      targetWorkspace.startsWith('/') &&
+      process.platform === 'win32' &&
+      task.hostWorkspacePath
+    ) {
+      targetWorkspace = task.hostWorkspacePath;
+    }
+    const s = await this.session(task.workerKey, 'worker', config, task.mode, targetWorkspace);
+    const workspaceMatches =
+      !targetWorkspace ||
+      s.agent.workspacePath === targetWorkspace ||
+      s.hostWorkspacePath === targetWorkspace;
+    if (!workspaceMatches) {
+      const changed = await this.runtime.setWorkspace(task.workerKey, targetWorkspace);
       if (!changed.ok) throw Error(changed.error);
     }
     if (!existing && task.conversationId) {
       const restored = await this.runtime.openHistory(task.workerKey, task.conversationId);
       if (!restored.ok) throw Error('SUPER_HISTORY_UNAVAILABLE');
-      await this.session(task.workerKey, 'worker', config, task.mode);
+      await this.session(task.workerKey, 'worker', config, task.mode, s.agent.workspacePath || '');
     }
     if (task.observation) {
       const readonly = new Set([
@@ -91,6 +123,7 @@ class RuntimeAdapter {
       checkpoint({
         conversationId: s.agent.conversationId || '',
         workspacePath: s.agent.workspacePath || '',
+        hostWorkspacePath: s.hostWorkspacePath || task.hostWorkspacePath || '',
       });
     save();
     this.service.authorize(task.workerKey);
@@ -101,6 +134,7 @@ class RuntimeAdapter {
         taskId: task.id,
         title: task.title,
         mode: task.mode,
+        ...(s.agent.workspacePath ? { workspacePath: s.agent.workspacePath } : {}),
         recovery: task.attempts > 1,
         policy: task.observation
           ? 'Read-only background investigation under owner policy: ' + config.rules

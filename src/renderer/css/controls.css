@@ -21,23 +21,29 @@
 }
 :is(input[type="checkbox"], .cibyp-switch)::after {
   content: '';
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
+  position: absolute !important;
+  top: 2px !important;
+  left: 2px !important;
+  width: 18px !important;
+  height: 18px !important;
+  border-radius: 50% !important;
   background: var(--text-secondary, var(--fg, #5a5a7a));
+  transform: none !important;
+  transition: left 140ms ease, background 140ms ease;
 }
 :is(input[type="checkbox"]:checked, .cibyp-switch[aria-checked="true"]) {
   border-color: var(--accent, #4f8cff) !important;
   background: var(--accent, #4f8cff) !important;
 }
 :is(input[type="checkbox"]:checked, .cibyp-switch[aria-checked="true"])::after {
-  left: 22px;
+  left: 22px !important;
+  transform: none !important;
   background: var(--accent-text, #fff);
 }
-input[type="checkbox"]:indeterminate::after { left: 12px; }
+input[type="checkbox"]:indeterminate::after {
+  left: 12px !important;
+  transform: none !important;
+}
 :is(input[type="checkbox"], .cibyp-switch):disabled {
   opacity: .45 !important;
   cursor: not-allowed;
@@ -86,4 +92,100 @@ progress::-moz-progress-bar {
   :is(input[type="checkbox"], .cibyp-switch)::after { background: ButtonText; }
   :is(input[type="checkbox"]:checked, .cibyp-switch[aria-checked="true"]) { background: Highlight !important; }
   :is(input[type="checkbox"]:checked, .cibyp-switch[aria-checked="true"])::after { background: HighlightText; }
+}
+.artifacts-search {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 6px 10px;
+  max-width: 660px;
+}
+
+.artifacts-search > label {
+  grid-column: 1 / -1;
+}
+
+.artifacts-search > input {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.artifacts-list {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.artifacts-list > li {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  overflow-wrap: anywhere;
+}
+
+.artifacts-list small,
+.artifacts-list code {
+  color: var(--text-secondary);
+}
+
+.artifacts-list p {
+  margin: 0;
+}
+
+.history-management-list {
+  display: grid;
+  max-height: 380px;
+  overflow: auto;
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 6px;
+  border-block: 1px solid var(--border-color);
+}
+
+.history-management-list label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+}
+
+.history-management-list label:is(:hover, :focus-within) {
+  background: var(--bg-hover);
+}
+
+.history-management-list small {
+  grid-column: 2;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.history-management-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+form.history-management-actions {
+  align-items: flex-end;
+}
+
+form.history-management-actions label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
 }

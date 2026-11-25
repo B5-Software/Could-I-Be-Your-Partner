@@ -17,6 +17,7 @@ async function startFrontend(address) {
   const client = require('../tui/backend-connect').clientFor(address);
   const snapshot = await client.connect();
   if (snapshot.pid !== address.pid) throw new Error('The shared backend changed; restart the client');
+  const version = require('../../package.json').version;
   const settings = await client.request('getSettings');
   await app.whenReady();
   const pages = path.join(__dirname, '../renderer/pages');
@@ -75,6 +76,7 @@ async function startFrontend(address) {
     if (channel === 'app:renderer-failed') { reportStartupFailure(String(args[0]).slice(0, 4000)); return null; }
     if (channel === 'app:startup-retry') { rendererReady = false; armStartupTimer(); window.reload(); return { ok: true }; }
     if (channel === 'app:startup-close') { window.destroy(); return { ok: true }; }
+    if (channel === 'app:getVersion') return version;
     if (channel === 'backend:remote-status') return remote.status(event.sender);
     if (channel === 'backend:remote-connect') return remote.connect(event.sender, args[0]);
     if (channel === 'backend:remote-disconnect') return remote.disconnect(event.sender);
@@ -100,7 +102,7 @@ async function startFrontend(address) {
     const dark = theme.mode === 'dark' || (theme.mode !== 'light' && require('electron').nativeTheme.shouldUseDarkColors);
     const accent = /^#[\da-f]{6}$/i.test(theme.accentColor || '') ? theme.accentColor : '#4f8cff';
     const bg = /^#[\da-f]{6}$/i.test(theme.backgroundColor || '') ? theme.backgroundColor : dark ? '#17181d' : '#f5f7fa';
-    await splash.loadFile(path.join(pages, 'splash.html'), { query: { dark: dark ? '1' : '0', accent: accent.slice(1), bg: bg.slice(1), language: settings.language || 'zh', version: app.getVersion() } });
+    await splash.loadFile(path.join(pages, 'splash.html'), { query: { dark: dark ? '1' : '0', accent: accent.slice(1), bg: bg.slice(1), language: settings.language || 'zh', version } });
     splash.webContents.send('vm:init', { vmMode: !bootReady });
   }
   window.webContents.on('did-fail-load', (_event, code, description, _url, isMainFrame) => { if (isMainFrame && code !== -3) reportStartupFailure(description); });

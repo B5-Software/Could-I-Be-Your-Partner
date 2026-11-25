@@ -366,3 +366,97 @@ test('a failed durable write stops active workers and prevents further tools', a
   );
   assert.equal((await f.service.request('status')).error, 'SUPER_STORAGE_UNAVAILABLE');
 });
+
+test('Code mode workspacePath is propagated to tasks, fingerprinted, and isolated across workspaces', async (t) => {
+  const f = fixture(t);
+  const op = randomUUID();
+  const ev = await f.submit('Audit repo A', {
+    mode: 'code',
+    workspacePath: '/workspace/repo-a',
+    operationId: op,
+  });
+  assert.equal(ev.workspacePath, '/workspace/repo-a');
+  await assert.rejects(
+    f.submit('Audit repo A', {
+      mode: 'code',
+      workspacePath: '/workspace/repo-b',
+      operationId: op,
+    }),
+    /CONFLICT/,
+  );
+  await until(() => f.running.size === 1);
+  const task = (await f.service.request('list')).items[0];
+  assert.equal(task.mode, 'code');
+  assert.equal(f.running.get(task.id).task.workspacePath, '/workspace/repo-a');
+  await assert.rejects(
+    f.submit('Switch workspace on same task', {
+      mode: 'code',
+      taskId: task.id,
+      workspacePath: '/workspace/repo-b',
+    }),
+    /SCOPE_FORBIDDEN/,
+  );
+  await f.finish(task.id);
+});
+
+test('RuntimeAdapter passes Code workspacePath directly to createSession and handles VM host mounts cleanly', async () => {
+  const { RuntimeAdapter } = require('../../src/main/services/super-agent/runtime');
+  const created = [];
+  let setWorkspaceCalls = 0;
+  const sessions = new Map();
+  const runtime = {
+    sessions,
+    getSettings: async () => ({ runtime: { location: 'vm' }, llm: { pool: [] } }),
+    createSession(opts) {
+      created.push(opts);
+      const s = {
+        key: opts.key,
+        mode: opts.mode,
+        hostWorkspacePath: opts.workspacePath,
+        agent: {
+          workspacePath: '/workspace/_ext/repo-a',
+          codeWorkspacePath: '/workspace/_ext/repo-a',
+          conversationId: 'conv-1',
+          contextManager: { getHistoryMessages: () => [] },
+          saveToHistory: async () => {},
+        },
+      };
+      sessions.set(opts.key, s);
+      return s;
+    },
+    initialize: async () => {},
+    setWorkspace: async () => {
+      setWorkspaceCalls++;
+      return { ok: true };
+    },
+    sendMessage: async () => ({ ok: true }),
+    close: async () => {},
+  };
+  const service = {
+    authorize: () => {},
+    store: { state: { tasks: [] } },
+    find: () => ({ inputIds: [] }),
+  };
+  const adapter = new RuntimeAdapter(runtime, service);
+  const checkpoints = [];
+  await adapter.run(
+    {
+      id: 't1',
+      title: 'VM code task',
+      mode: 'code',
+      workerKey: 'super-worker-t1',
+      workspacePath: 'D:\\repos\\repo-a',
+      attempts: 1,
+      observation: false,
+    },
+    [{ id: 'e1', text: 'check repo' }],
+    { routerModel: '', workerModel: '', rules: '' },
+    (meta) => checkpoints.push(meta),
+  );
+  assert.equal(created.length, 1);
+  assert.equal(created[0].workspacePath, 'D:\\repos\\repo-a');
+  assert.equal(created[0].codeWorkspacePath, 'D:\\repos\\repo-a');
+  assert.equal(setWorkspaceCalls, 0);
+  assert.equal(checkpoints[0].workspacePath, '/workspace/_ext/repo-a');
+  assert.equal(checkpoints[0].hostWorkspacePath, 'D:\\repos\\repo-a');
+});

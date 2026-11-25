@@ -13,7 +13,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** A wait budget releases the caller; it never terminates the owned process. */
 class ShellJobs {
-  constructor({ getVmService, isVmOperation, confine, isSandboxDenial }) {
+  constructor({ getVmService, isVmOperation, confine, isSandboxDenial = () => false }) {
     Object.assign(this, { getVmService, isVmOperation, confine, isSandboxDenial });
     this.jobs = new Map();
     this.closedOwners = new Set();
@@ -24,6 +24,14 @@ class ShellJobs {
       if (this.disposed) throw new Error('应用正在退出');
       const owner = String(options.sessionKey || '');
       if (this.closedOwners.has(owner)) throw new Error('任务所属窗口已关闭');
+      if (options.mode !== undefined && !['foreground', 'background'].includes(options.mode))
+        throw new Error('Invalid shell execution mode');
+      const waitMs =
+        options.mode === 'foreground'
+          ? (options.timeoutMs ?? options.yieldMs ?? 120000)
+          : options.mode === 'background'
+            ? 0
+            : (options.yieldMs ?? (options.jobId ? 0 : 1000));
       if (options.action === 'list') {
         return {
           ok: true,
@@ -41,7 +49,7 @@ class ShellJobs {
         const job = this.jobs.get(String(options.jobId));
         if (!job || job.owner !== owner) throw new Error('命令任务不存在于当前会话');
         if (options.action === 'stop') await this.stop(job);
-        return await this.wait(job, options.yieldMs ?? 0);
+        return await this.wait(job, waitMs, options.mode === 'foreground');
       }
       if (typeof script !== 'string' || !script.trim()) throw new Error('需要脚本内容或已有 jobId');
       // Retain finished tasks for inspection, but bound the in-memory registry.
@@ -72,7 +80,7 @@ class ShellJobs {
         this.jobs.delete(job.id);
         throw new Error('任务所属窗口已关闭');
       }
-      return await this.wait(job, options.yieldMs ?? 1000);
+      return await this.wait(job, waitMs, options.mode === 'foreground');
     } catch (error) {
       return {
         ok: false,
@@ -211,8 +219,8 @@ class ShellJobs {
       job.service.syncWorkspace({ direction: 'pull', reason: 'shell-job' }).catch(() => {});
     }
   }
-  async wait(job, requested) {
-    const waitMs = Math.max(0, Math.min(10000, Number(requested) || 0));
+  async wait(job, requested, foreground = false) {
+    const waitMs = Math.max(0, Math.min(foreground ? 120000 : 10000, Number(requested) || 0));
     const deadline = Date.now() + waitMs;
     do {
       if (job.location === 'vm') await this.readVm(job);

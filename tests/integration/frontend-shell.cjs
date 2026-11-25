@@ -17,6 +17,8 @@ if (!nativeCodeOSS) {
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-frontends-'));
 const workspace = path.join(profile, 'workspace');
 for (const name of ['data', 'documents', 'workspace']) fs.mkdirSync(path.join(profile, name));
+const webChatWorkspace = path.join(profile, 'Web Chat Workspace');
+fs.mkdirSync(path.join(webChatWorkspace, 'browser-directory-fixture'), { recursive: true });
 fs.writeFileSync(path.join(workspace, 'notes.md'), '# Shared workspace\n');
 app.setPath('userData', profile);
 app.setPath('documents', path.join(profile, 'documents'));
@@ -183,7 +185,7 @@ ipcMain.once('app:renderer-ready', (event) =>
       hold = false;
       release();
       await contents.executeJavaScript(
-        `(async()=>{${checkHelpers} await until(()=>!window.__sharedAgent.running); await paint();})()`,
+        `(async()=>{${checkHelpers} await until(()=>!window.__sharedAgent.running); const av=document.querySelector('#chat-messages .message-avatar'); check(av && getComputedStyle(av).display==='none','Chat avatar should be hidden in V2'); await paint();})()`,
       );
       await screenshot('v2-chat-light');
       await contents.executeJavaScript(`(async()=>{${checkHelpers}
@@ -368,7 +370,8 @@ ipcMain.once('app:renderer-ready', (event) =>
       check(document.querySelector('#sidebar > .sidebar-nav'),'V1 navigation not restored');
       check(!document.querySelector('.session-tab.v2-filtered'),'V2 filter leaked into V1');
       check(!document.getElementById('sidebar').inert,'V1 sidebar remained inert');
-      check(getComputedStyle(document.getElementById('v2-rail')).display==='none','V2 rail leaked into V1');
+      check(!document.getElementById('v2-rail'),'Removed 48px icon rail should not exist');
+      check(getComputedStyle(document.getElementById('v2-sidebar-toggle')).display==='none','V2 sidebar toggle leaked into V1');
       check(window.__sharedInput.value==='Draft survives the switch','Round trip lost draft');
       await window.api.setSettings({theme:{...settings.theme,frontend:'v2'}});
       await until(()=>document.documentElement.dataset.frontend==='v2');
@@ -395,6 +398,19 @@ ipcMain.once('app:renderer-ready', (event) =>
       await screenshot('v2-settings');
       console.log('[frontend-shell] All shared page and settings destinations passed');
       await contents.executeJavaScript(`(async()=>{${checkHelpers}
+        window.navigatePage('chat'); await paint();
+        document.getElementById('v2-inspector-toggle').click(); await paint();
+        check(document.documentElement.dataset.v2Inspector==='open','V2 inspector did not open');
+        check(getComputedStyle(document.getElementById('v2-inspector')).display==='flex','V2 inspector not visible');
+        document.querySelector('#v2-inspector [data-inspector-tab="activity"]').click(); await paint();
+        document.getElementById('v2-inspector-toggle').click(); await paint();
+        check(document.documentElement.dataset.v2Inspector==='closed','V2 inspector did not close');
+        document.getElementById('v2-cmd-trigger').click();
+        await until(()=>document.querySelector('.v2-cmd-dialog[open]'));
+        document.querySelector('.v2-cmd-input').value='SuperAgent';
+        document.querySelector('.v2-cmd-input').dispatchEvent(new Event('input'));
+        check(document.querySelector('.v2-cmd-item')?.textContent.includes('SuperAgent'),'Command palette did not filter SuperAgent');
+        document.querySelector('.v2-cmd-dialog').close();
         window.navigatePage('superagent');
         await until(()=>document.querySelector('#page-superagent .super-composer'));
         check(window.CibypSuperAgent,'Shared SuperAgent component missing');
@@ -445,12 +461,16 @@ ipcMain.once('app:renderer-ready', (event) =>
       await window.api.setSettings({theme:{...settings.theme,frontend:'v2'}});
       await until(()=>document.documentElement.dataset.frontend==='v2');
       check(babeInput===document.getElementById('babe-chat-input') && babeInput.value==='Keep this Babe draft','Babe composer switch lost draft or identity');
+      check(getComputedStyle(document.getElementById('babe-avatar')).display!=='none','Babe avatar should remain visible in V2');
       await paint();
     })()`);
       await screenshot('v2-babe');
       await contents.executeJavaScript(`(async()=>{${checkHelpers}
       document.getElementById('mode-btn-code').click();
-      await until(()=>window.getCurrentMode()==='code' && window.__sessionManager.getActive('code'), 'Code workspace/session unavailable');
+      await until(()=>{
+        const session = window.__sessionManager.getActive('code');
+        return window.getCurrentMode()==='code' && session?._renderedOnce && !session._replaying;
+      }, 'Code workspace/session unavailable');
       check(document.getElementById('code-workspace-path').textContent.includes('workspace'),'Workspace missing');
       document.getElementById('code-chat-input').value='Code draft';
       document.getElementById('code-chat-input').dispatchEvent(new Event('input',{bubbles:true}));
@@ -462,7 +482,8 @@ ipcMain.once('app:renderer-ready', (event) =>
       check(window.__sessionManager.getActive('code').agent===modeAgent,'Code agent replaced');
       check(document.getElementById('code-chat-input').value==='Code draft','Code draft lost');
       document.getElementById('btn-code-immersive').click(); await paint();
-      check(getComputedStyle(document.getElementById('v2-rail')).display==='none','Rail visible in immersive mode');
+      check(getComputedStyle(document.getElementById('sidebar')).display==='none','Sidebar visible in immersive mode');
+      check(getComputedStyle(document.getElementById('v2-sidebar-toggle')).display==='none','Sidebar toggle visible in immersive mode');
       check(getComputedStyle(document.getElementById('btn-code-immersive')).display!=='none','Cannot exit immersive mode');
       document.getElementById('btn-code-immersive').click(); await paint();
     })()`);
@@ -516,6 +537,29 @@ ipcMain.once('app:renderer-ready', (event) =>
       i18nSetLanguage('zh-CN'); await paint();
     })()`);
       await screenshot('v2-chat-dark');
+      await contents.executeJavaScript(`(async()=>{ ${checkHelpers}
+        const sidebar = document.getElementById('sidebar');
+        const toggle = document.getElementById('v2-sidebar-toggle');
+        if (document.documentElement.dataset.v2Sidebar === 'closed') toggle.click();
+        await paint();
+        const width = sidebar.getBoundingClientRect().width;
+        check(width > 0, 'Expected the desktop sidebar to be open');
+        sidebar.querySelector('[data-page="quant"]').click();
+        const quant = document.getElementById('page-quant');
+        await until(() => quant.classList.contains('active'));
+        await paint();
+        const bounds = sidebar.getBoundingClientRect();
+        check(Math.abs(bounds.width - width) < 1 && !sidebar.inert, 'Quant hid or resized the sidebar');
+        check(quant.getBoundingClientRect().left >= bounds.right - 1, 'Quant overlapped the sidebar');
+        toggle.click();
+        await paint();
+        check(sidebar.getBoundingClientRect().width === 0, 'Sidebar could not close in Quant');
+        toggle.click();
+        await paint();
+        check(sidebar.getBoundingClientRect().width > 0, 'Sidebar could not reopen in Quant');
+        sidebar.querySelector('[data-page="chat"]').click();
+        await until(() => document.getElementById('page-chat').classList.contains('active'));
+      })()`);
       if (!nativeCodeOSS) {
         // Browser UI uses the same entry point and backend settings/events.
         const webStatus = await contents.executeJavaScript('window.api.webControlStart()');
@@ -589,6 +633,15 @@ ipcMain.once('app:renderer-ready', (event) =>
         await window.api.setSettings({theme:{frontend:'v2'}});
         await until(()=>document.documentElement.dataset.frontend==='v2');
         check(window.__webInput===document.getElementById('chat-input') && window.__webInput.value==='Browser draft','Browser draft lost');
+        document.querySelector('.chat-input-area .v2-composer-workspace').click();
+        await until(()=>document.querySelector('.vm-file-dialog-modal #go')?.onclick, 'WebUI folder picker missing');
+        const picker = document.querySelector('.vm-file-dialog-modal');
+        picker.querySelector('#directory').value = ${JSON.stringify(webChatWorkspace)};
+        picker.querySelector('#go').click();
+        await until(()=>[...picker.querySelectorAll('.entry')].some(row=>row.textContent.includes('browser-directory-fixture')), 'WebUI host directory did not load');
+        picker.querySelector('#choose').click();
+        await until(()=>window.__sessionManager.getActive('chat').agent.workspacePath===${JSON.stringify(webChatWorkspace)}, 'WebUI Chat did not adopt the host directory');
+        check(document.querySelector('.chat-input-area .v2-composer-workspace').textContent.includes('Web Chat Workspace'), 'Composer did not display its selected directory');
         window.navigatePage('settings'); window.activateSettingsTab('theme'); await paint();
         check(document.getElementById('setting-frontend').value==='v2','Browser settings selector out of sync');
         const theme=(await window.api.getSettings()).theme;
@@ -606,8 +659,14 @@ ipcMain.once('app:renderer-ready', (event) =>
         );
         const browserQuant = await web.webContents.executeJavaScript(`(async()=>{${checkHelpers}
         const workspace = await window.api.backendRequest('quant:request','workspace.create',{name:'Browser quant layout fixture',venue:'coinbase'});
+        const sidebar = document.getElementById('sidebar');
+        if (document.documentElement.dataset.v2Sidebar === 'closed') document.getElementById('v2-sidebar-toggle').click();
         window.navigatePage('quant');
         await until(()=>!document.querySelector('[data-layout]').hidden);
+        await paint();
+        const bounds = sidebar.getBoundingClientRect();
+        check(bounds.width > 0 && !sidebar.inert, 'WebUI Quant hid the sidebar');
+        check(document.getElementById('page-quant').getBoundingClientRect().left >= bounds.right - 1, 'WebUI Quant overlapped the sidebar');
         const mode = document.querySelector('[data-action=immersive]');
         mode.click();
         await until(()=>document.querySelector('[data-layout]').dataset.layout==='immersive');
@@ -636,10 +695,17 @@ ipcMain.once('app:renderer-ready', (event) =>
       win.setContentSize(550, 850);
       await contents.executeJavaScript(`(async()=>{${checkHelpers}
       await paint(); check(document.documentElement.dataset.v2Sidebar==='closed','Mobile sidebar not collapsed');
+      window.navigatePage('quant');
+      await until(()=>document.getElementById('page-quant').classList.contains('active'));
       document.getElementById('v2-sidebar-toggle').click(); await paint();
-      check(!document.getElementById('sidebar').inert,'Mobile sidebar cannot open');
+      const sidebar = document.getElementById('sidebar'), sidebarBounds = sidebar.getBoundingClientRect();
+      check(sidebarBounds.width > 0 && !sidebar.inert,'Mobile sidebar cannot open over Quant');
+      check(sidebar.contains(document.elementFromPoint(sidebarBounds.left + 12, sidebarBounds.top + 12)), 'Quant covered the mobile sidebar');
       document.querySelector('.v2-sidebar-backdrop').click(); await paint();
       check(document.getElementById('sidebar').inert,'Mobile sidebar cannot close');
+      window.navigatePage('chat');
+      await until(()=>document.getElementById('page-chat').classList.contains('active'));
+      await paint();
       const send=document.getElementById('btn-send').getBoundingClientRect();
       check(send.right<=innerWidth && send.bottom<=innerHeight && send.width>0,'Send button clipped on mobile');
       check(document.documentElement.scrollWidth<=innerWidth,'Horizontal document overflow');

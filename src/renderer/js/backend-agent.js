@@ -12,15 +12,24 @@
   let first = true;
   function hydrate(a, view) {
     if (!view || a._backendClosed) return;
+    if (typeof view.viewSeq === 'number' && typeof a._viewSeq === 'number' && view.viewSeq < a._viewSeq) {
+      return;
+    }
+    if (typeof view.viewSeq === 'number') a._viewSeq = view.viewSeq;
     const s = view.session;
     a._runtimeOverride = view.runtimeOverride;
     if (a._runtimeOverride && a.settings) a.applySettings(a.settings);
     a.backendKey = s.key; a.sessionKey = s.key; a.mode = s.mode;
     a.conversationId = s.conversationId; a.conversationTitle = s.title;
+    const workspaceChanged = a.workspacePath !== s.workspacePath;
     a.workspacePath = s.workspacePath; a.codeWorkspacePath = s.mode === 'code' ? s.workspacePath : null;
     a.workspaceName = s.workspaceName || '';
     a.minimalMode = s.minimalMode; a.babeAffection = s.affection;
     a.running = s.busy; a.sessionStatus = s.status === 'running' ? 'working' : s.status;
+    a._activeStream = view.activeStream || null;
+    a._unadmittedInput = view.unadmittedInput || null;
+    a._runStartedAt = view.startedAt || null;
+    a._pendingInteraction = view.pendingInteraction || null;
     a.contextManager.loadFromHistory(view.messages || []);
     if (view.workingMessages) a.contextManager.messages = view.workingMessages;
     if (view.systemPrompt) a.contextManager.setSystemPrompt(view.systemPrompt);
@@ -33,6 +42,15 @@
     a._backendStats = view.stats;
     a.babeRelationship = view.stats?.relationship || null;
     a._compactionState = view.stats?.compaction || null;
+    const session = window.__sessionManager?.getByAgent(a);
+    if (session) {
+      if (s.conversationId && String(session.id) !== String(s.conversationId)) {
+        session.id = String(s.conversationId);
+      }
+      if (s.title && session.title !== s.title) session.title = s.title;
+      if (view.startedAt && s.busy) session.startedAt = view.startedAt;
+      if (workspaceChanged && session.active) window.CibypFrontendShell?.refresh();
+    }
   }
   proto._ensureBackend = async function (attachLatest = false) {
     if (this._backendClosed) throw new Error('This conversation has been closed');
@@ -86,35 +104,62 @@
   proto.agentLoop = function () { throw new Error('Agent execution is owned by the backend'); };
   const localSchemas = proto.getRuntimeToolSchemas;
   proto.getRuntimeToolSchemas = function () { return this._backendToolSchemas || localSchemas.call(this); };
+  function refreshView(a) {
+    if (!a || a._backendClosed || !a.backendKey) return Promise.resolve(null);
+    return request('getView', a.backendKey).then(view => {
+      hydrate(a, view);
+      window.CibypCompactionUI?.refresh();
+      return view;
+    });
+  }
+  function dispatchBackendEvent(a, event, opts = {}) {
+    if (!a || !event || a._backendClosed) return;
+    if (event.type === 'session-closed') { a._backendClosed = true; a.running = false; views.delete(a); return; }
+    if (event.type === 'agent-message') {
+      if (event.messageType === 'message-stored') {
+        window.CibypMessages?.admitted(a, event.data);
+        if (!opts.fromReplay) refreshView(a).catch(console.error);
+        return;
+      }
+      if (event.messageType === 'context-compaction') {
+        a._compactionState = event.data;
+        window.CibypCompactionUI?.refresh();
+      }
+      a.onMessage?.(event.messageType, event.data);
+      const session = window.__sessionManager?.getByAgent(a);
+      if (!opts.fromReplay && window.VoiceUI && (!session || session.active)) {
+        if (event.messageType === 'stream-chunk' && event.data?.content) window.VoiceUI.feedStreamChunk(event.data.content);
+        if (event.messageType === 'stream-end') window.VoiceUI.feedStreamEnd(event.data?.content || null);
+      }
+    }
+    else if (event.type === 'message' && event.role === 'user' && !a._sending) a.onMessage?.('user', { content: event.content, attachments: event.attachments });
+    else if (event.type === 'tool-call') {
+      let result = event.result; try { result = JSON.parse(result); } catch { /* Plain text result. */ }
+      a.onToolCall?.(event.name, event.args, event.status === 'running' ? 'calling' : event.status, result, event.callId);
+      if (!opts.fromReplay && (event.status === 'done' || event.status === 'denied' || event.status === 'error')) {
+        refreshView(a).catch(console.error);
+      }
+    } else if (event.type === 'title') { a.conversationTitle = event.title; a.onTitleChange?.(event.title); }
+    else if (event.type === 'status') { a.running = event.status === 'running'; a.onStatusChange?.(a.running ? 'working' : event.status); }
+    else if (event.type === 'notification' && event.notificationType === 'toast') window.showToast?.(event.payload?.message, event.payload?.type, event.payload?.duration);
+    if (!opts.fromReplay && ['status', 'usage', 'view-changed', 'context-compaction', 'messages-deleted'].includes(event.type)) {
+      refreshView(a).then(view => {
+        if (event.type === 'messages-deleted') a.onMessage?.('conversation-replaced', view);
+      }).catch(console.error);
+    }
+  }
   window.api.onBackendEvent(event => {
     for (const a of views) {
       if (event.key !== a.backendKey) continue;
       if (event.type === 'session-closed') { a._backendClosed = true; a.running = false; views.delete(a); continue; }
-      if (event.type === 'agent-message') {
-        if (event.messageType === 'message-stored') { window.CibypMessages?.admitted(a, event.data); continue; }
-        if (event.messageType === 'context-compaction') {
-          a._compactionState = event.data;
-          window.CibypCompactionUI?.refresh();
-        }
-        a.onMessage?.(event.messageType, event.data);
-        const session = window.__sessionManager?.getByAgent(a);
-        if (window.VoiceUI && (!session || session.active)) {
-          if (event.messageType === 'stream-chunk' && event.data?.content) window.VoiceUI.feedStreamChunk(event.data.content);
-          if (event.messageType === 'stream-end') window.VoiceUI.feedStreamEnd(event.data?.content || null);
-        }
+      const session = window.__sessionManager?.getByAgent(a);
+      if (session && session._replaying) {
+        if (!Array.isArray(session._replayQueue)) session._replayQueue = [];
+        session._replayQueue.push(event);
+        continue;
       }
-      else if (event.type === 'message' && event.role === 'user' && !a._sending) a.onMessage?.('user', { content: event.content, attachments: event.attachments });
-      else if (event.type === 'tool-call') {
-        let result = event.result; try { result = JSON.parse(result); } catch { /* Plain text result. */ }
-        a.onToolCall?.(event.name, event.args, event.status === 'running' ? 'calling' : event.status, result, event.callId);
-      } else if (event.type === 'title') { a.conversationTitle = event.title; a.onTitleChange?.(event.title); }
-      else if (event.type === 'status') { a.running = event.status === 'running'; a.onStatusChange?.(a.running ? 'working' : event.status); }
-      else if (event.type === 'notification' && event.notificationType === 'toast') window.showToast?.(event.payload?.message, event.payload?.type, event.payload?.duration);
-      if (['status', 'usage', 'view-changed', 'stream-end', 'context-compaction', 'messages-deleted'].includes(event.type)) request('getView', a.backendKey).then(view => {
-        hydrate(a, view); window.CibypCompactionUI?.refresh();
-        if (event.type === 'messages-deleted') a.onMessage?.('conversation-replaced', view);
-      }).catch(console.error);
+      dispatchBackendEvent(a, event);
     }
   });
-  window.CibypBackendViews = { hydrate, request, views };
+  window.CibypBackendViews = { hydrate, request, views, refreshView, dispatchEvent: dispatchBackendEvent };
 })();

@@ -11,6 +11,8 @@
     babe: ['Babe 模式', '设置恋爱模式形象及主动消息偏好。', '恋爱 陪伴 主动'],
     user: ['个人资料', '设置显示名称、头像与个人介绍。', '昵称 资料 头像'],
     'automatic-memory': ['自动记忆', '跨会话延续偏好与持续事项，可随时暂停、编辑或删除。', '自动记忆 memory 跨会话 偏好 自动记住'],
+    'history-management': ['聊天记录管理', '搜索和批量管理会话，可将备份还原为独立副本。', '聊天记录 会话 导出 备份 加密 还原 archive export'],
+    artifacts: ['产物', '查找 Agent 已呈递的文件，可按文件名、路径或会话搜索。', '产物 文件呈递 附件 artifact presentFile'],
     theme: ['外观', '深浅色、强调色、背景色和焦点描边。配色同步到 App 与 VM。', '个性化 深色 浅色 accent 背景 焦点 描边'],
     animations: ['动效', '页面与弹窗渐显渐隐，侧栏侧向滑动；同时遵循系统减少动态效果偏好。', '动画 展开 折叠'],
     fonts: ['字体', '字体与大小修改后即时生效。', '字号 排版'],
@@ -93,7 +95,7 @@
       panel.inert = !panel.classList.contains('active'); panel.setAttribute('aria-hidden', String(panel.inert));
       const info = settingsHelp[tab];
       if (info && tab !== 'overview') {
-        const intro = document.createElement('p'); intro.className = 'settings-section-intro'; intro.textContent = info[1]; panel.prepend(intro);
+        const intro = document.createElement('p'); intro.className = 'settings-section-intro'; intro.dataset.i18n = info[1]; intro.textContent = t(info[1], info[1]); panel.prepend(intro);
       }
       panel.querySelectorAll('.setting-item').forEach(item => {
         const label = item.querySelector('label');

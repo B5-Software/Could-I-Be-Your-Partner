@@ -21,6 +21,11 @@ module.exports = function registerTerminalIpc({ ipcMain, getMainWindow, getSetti
 const terminals = new Map();
 let terminalIdCounter = 0;
 const TERMINAL_HISTORY_MAX = 100000; // 100KB
+const missingTerminal = (id) => ({
+  ok: false,
+  code: Number.isSafeInteger(id) && id > 0 ? 'TERMINAL_GONE' : 'TERMINAL_ID_REQUIRED',
+  error: 'Terminal does not exist. Use the terminalId returned by makeTerminal for interactive commands. For one-shot commands use runShellScriptCode.',
+});
 
 // 特殊按键 → 终端转义序列（用于 TUI/menuconfig 键盘交互）
 // 参考 xterm 与 readline 的标准按键编码
@@ -87,7 +92,6 @@ function _broadcastTerminalEvent(channel, payload) {
 
 function _appendTerminalData(id, entry, data) {
   entry.commandTracker?.append(data);
-  entry.agentBuffer += data;
   entry.fullHistory += data;
   entry.totalChars = (entry.totalChars || 0) + data.length;
   if (entry.fullHistory.length > TERMINAL_HISTORY_MAX) {
@@ -125,7 +129,6 @@ ipcMain.handle('terminal:make', async (_, cwd, opts = {}) => {
       const term = new VmPtyAdapter({ vmService: vmSvc, cwd: vmCwd, shell: shell.file, args: shell.args });
       const entry = {
         term,
-        agentBuffer: '',
         fullHistory: '',
         cwd: vmCwd,
         createdAt: Date.now(),
@@ -135,7 +138,6 @@ ipcMain.handle('terminal:make', async (_, cwd, opts = {}) => {
         sandboxMode: 'vm',
         sandboxed: true,
         location: 'vm',
-        buffer: () => { const b = entry.agentBuffer; entry.agentBuffer = ''; return b; }
       };
       entry.commandTracker = new TerminalCommand(term, entry.shellName);
       term.onData(data => _appendTerminalData(id, entry, data));
@@ -194,10 +196,9 @@ ipcMain.handle('terminal:make', async (_, cwd, opts = {}) => {
       cwd: effectiveCwd,
       env
     });
-    // 终端元数据：buffer 兼容 Agent 现有调用；fullHistory 用于 xterm.js 回放与显示
+    // fullHistory is bounded raw PTY data for xterm replay.
     const entry = {
       term,
-      agentBuffer: '',
       fullHistory: '',
       cwd: effectiveCwd,
       createdAt: Date.now(),
@@ -206,8 +207,6 @@ ipcMain.handle('terminal:make', async (_, cwd, opts = {}) => {
       ownerSessionKey: typeof opts.sessionKey === 'string' ? opts.sessionKey : null,
       sandboxMode,
       sandboxed: confined,
-      // 兼容旧接口：Agent 调用 t.buffer() 取走 agentBuffer
-      buffer: () => { const b = entry.agentBuffer; entry.agentBuffer = ''; return b; }
     };
     entry.commandTracker = new TerminalCommand(term, entry.shellName);
     term.onData(data => _appendTerminalData(id, entry, data));
@@ -326,27 +325,20 @@ ipcMain.handle('terminal:getHistory', (_, id) => {
   return { ok: true, history: t.fullHistory, endOffset: t.totalChars || 0 };
 });
 
-ipcMain.handle('terminal:run', (_, id, command) => {
+async function executeTrackedCommand(id, command, timeoutMs) {
   const t = terminals.get(id);
-  if (!t) return { ok: false, error: '终端不存在' };
-  if (t.commandTracker.current?.running) return { ok: false, error: 'A command is still running' };
-  t.agentBuffer = ''; // 清空 Agent 读取缓冲区
-  t.term.write(command + '\r');
-  t.lastCommand = String(command).slice(0, 60);
-  return new Promise(resolve => {
-    setTimeout(() => { resolve({ ok: true, output: t.buffer() }); }, 2000);
-  });
-});
-ipcMain.handle('terminal:await', async (_, id, command, timeoutMs) => {
-  const t = terminals.get(id);
-  if (!t) return { ok: false, error: 'Terminal does not exist' };
+  if (!t) return missingTerminal(id);
   if (command != null && String(command).trim()) {
     const error = t.commandTracker.start(String(command));
     if (error) return error;
     t.lastCommand = String(command).slice(0, 60);
   }
-  return t.commandTracker.wait(timeoutMs);
-});
+  return { ...await t.commandTracker.wait(timeoutMs), terminalId: id };
+}
+ipcMain.handle('terminal:run', (_, id, command, yieldMs = 0) =>
+  executeTrackedCommand(id, command, yieldMs));
+ipcMain.handle('terminal:await', (_, id, command, timeoutMs) =>
+  executeTrackedCommand(id, command, timeoutMs));
 ipcMain.handle('terminal:kill', (_, id) => {
   const t = terminals.get(id);
   if (t) {

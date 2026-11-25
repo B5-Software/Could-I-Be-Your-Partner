@@ -96,6 +96,7 @@ function agentDefaultHost() {
 
 const BABE_RELATIONSHIP_DATA = typeof BabeRelationshipData !== 'undefined' ? BabeRelationshipData : typeof require === 'function' ? require('../../shared/babe-relationship') : null;
 const AGENT_ITERATIONS = typeof AgentIterations !== 'undefined' ? AgentIterations : typeof require === 'function' ? require('../../shared/agent-iterations') : null;
+const INTERACTIVE_CONTENT = typeof InteractiveContent !== 'undefined' ? InteractiveContent : typeof require === 'function' ? require('../../shared/interactive-content') : null;
 
 // Wire aliases are resolved before permission and delegated-scope checks.
 const OPENCODE_TOOL_ALIASES = { bash: 'runShellScriptCode', shell: 'runShellScriptCode', write: 'editFile', read: 'readFile', edit: 'editFile', glob: 'localSearch', grep: 'searchInFiles' };
@@ -493,8 +494,9 @@ class Agent {
     // Don't draw tarot card on init - draw on first message
     // Create workspace
     this.resetOptimizedTools();
-    const ws = this.mode === 'code' && this.codeWorkspacePath
-      ? { ok: true, path: this.codeWorkspacePath }
+    const preparedWorkspace = this.mode === 'code' ? this.codeWorkspacePath : this.workspacePath;
+    const ws = preparedWorkspace
+      ? { ok: true, path: preparedWorkspace }
       : await this.host.api.workspaceCreate({ fresh: true });
     if (ws.ok) {
       this.workspacePath = ws.path;
@@ -588,7 +590,12 @@ class Agent {
   }
 
   getSystemPrompt() {
-    return this._buildSystemPrompt() + '\n\nWorkspace naming: If you save artifacts in an automatically created workspace, call renameWorkspace with a concise semantic name before finishing. This name is independent of the conversation title. Keep using the stable workspace path after naming. Do not rename user-selected projects. If naming fails, report it honestly; do not retry indefinitely.';
+    const shell = this.minimalMode
+      ? 'Shell workflow: Run a command once with bash. Set a short yieldMs for long work and use action=poll without repeating the command. Check output and the exit code. If the shell is lost, inspect prior effects before repeating work.'
+      : 'Shell workflow: Use runShellScriptCode for ordinary commands, even on Windows. Pass cwd rather than adding cd. Use foreground for short commands whose result you need now and background for long jobs such as downloads, builds or servers. Start each job once. If running, keep the returned jobId and poll that job without passing the command again. Check the exit code and relevant output before reporting success. Use a PTY only for interactive programs. Call makeTerminal first, use its exact terminalId, and poll awaitTerminalCommand with that ID and no command. TERMINAL_GONE means check the prior effects and open a fresh terminal if still needed; never guess an ID or replay a possibly executed command.';
+    const scan = this.settings?.agent?.restrictDiskScan === false ? '' :
+      '\nFile search policy: Read the known file or list the immediate directory first. Search only the relevant, small subtree with specific names or patterns and bounded depth. Do not recurse over drive roots, home directories, system directories, or broad mounts, including through shell commands.';
+    return this._buildSystemPrompt() + '\n\n' + shell + scan;
   }
 
   _buildSystemPrompt() {
@@ -954,7 +961,7 @@ Use the latest relationship dossier and shared memories provided with this reque
    - 多处修改用 multiEditFile 批量编辑（edits 数组按顺序依次应用）。
    - old_string 必须与文件内容完全匹配（包括缩进和换行），出现多次时需提供更长上下文或设 replace_all=true。
    - 修改后说明修改了什么、为什么改。
-5. 终端命令：先调用 makeTerminal 创建终端会话（已自动定位 cwd 到工作区），拿到 terminalId 后调用 runTerminalCommand/awaitTerminalCommand 执行命令。终端是交互式 pty，可完整操作 TUI/menuconfig 等程序：用 terminalReadOutput 读取当前输出（lastLines 取末尾N行）、用 terminalPressKey 发送方向键/Enter/Tab/Esc/CtrlC 等按键、用 terminalSendInput 输入文本（不带回车）、用 terminalAnswerPrompt 回答 Y/n 等交互提问、用 terminalListSessions 查看会话。交互流程：执行命令 → terminalReadOutput 查看输出 → 判断是否需要交互 → 按键/输入应答 → 再读取确认。任务结束用 killTerminal 关闭。也可用 runShellScriptCode 一次性执行脚本。
+5. 终端命令：普通脚本和命令使用 runShellScriptCode。仅在需要按键、输入或操作 TUI 时创建 PTY，再按 terminalId 操作。
 6. 提供代码时使用 markdown 代码块并标注语言；执行命令时优先使用工具而非让用户手动操作。
 7. 遇到不确定的需求时主动询问用户，不要臆测后大量改代码。
 8. 工具调用失败时检查参数（路径、命令语法），重试或换方案，不要静默放弃。
@@ -1880,7 +1887,11 @@ Use the latest relationship dossier and shared memories provided with this reque
 
   async sendMessage(userMessage, attachments = [], inputOptions = {}) {
     const preparationRunId = this.runId;
-    if (!this.ephemeral && this.workspacePath && this.host.api.workspaceRetain) await this.host.api.workspaceRetain(this.workspacePath, true);
+    const firstWorkspaceUse = !this.ephemeral && !this.isSubagent && !this.workspaceExplicit && !this.conversationTitle &&
+      !attachments.length && this.workspacePath && this.host.api.workspaceRename &&
+      !this.contextManager.getHistoryMessages().some(message => message.role === 'user' || message.role === 'assistant');
+    if (!firstWorkspaceUse && !this.ephemeral && this.workspacePath && this.host.api.workspaceRetain)
+      await this.host.api.workspaceRetain(this.workspacePath, true);
     if (preparationRunId !== this.runId) return;
     // OpenAI/Anthropic 兼容端点允许无 API Key（llama.cpp 等本地推理场景）；
     // OpenCode Zen/Go 使用内置端点，无需 apiUrl；模型池有启用条目也可继续。
@@ -1906,7 +1917,22 @@ Use the latest relationship dossier and shared memories provided with this reque
 
     if (!this.conversationTitle) {
       this.conversationTitle = this.minimalMode ? String(userMessage).replace(/\s+/g, ' ').trim().slice(0, 60) : await this.generateConversationTitle(userMessage);
+      if (firstWorkspaceUse && preparationRunId + 1 === this.runId && this.conversationTitle) {
+        const previous = this.workspacePath;
+        const renamed = await this.host.api.workspaceRename(previous, this.conversationTitle, { beforeUse: true }).catch(() => null);
+        if (renamed?.method === 'initial-rename' && renamed.path) {
+          this.workspacePath = renamed.path;
+          if (this.codeWorkspacePath === previous) this.codeWorkspacePath = renamed.path;
+          this.workspaceName = renamed.name;
+          this.host.api.webControlSetWorkDir(renamed.path);
+        }
+      }
       if (this.onTitleChange) this.onTitleChange(this.conversationTitle);
+    }
+    if (firstWorkspaceUse && this.host.api.workspaceRetain) {
+      const admittedWhenRetaining = this.runId === runId;
+      await this.host.api.workspaceRetain(this.workspacePath, true);
+      if (admittedWhenRetaining && this.runId !== runId) return;
     }
 
     // Refresh system prompt with current time and tarot card
@@ -2030,6 +2056,7 @@ Use the latest relationship dossier and shared memories provided with this reque
         summaries: this.contextManager.summaries,
         tarotCard: this.tarotCard,
         workspacePath: this.workspacePath,
+        ...(this.workspaceExplicit && { workspaceExplicit: true, hostWorkspacePath: this.hostWorkspacePath }),
         workspaceName: this.workspaceName || '',
         mode: this.mode || 'chat',
         messagingId: this.messagingId || this.conversationId,
@@ -2078,6 +2105,9 @@ Use the latest relationship dossier and shared memories provided with this reque
   async loadFromHistory(conversation) {
     await this.resetMinimalShell();
     this.conversationId = conversation.id;
+    this.sessionStatus = ['stopped', 'interrupted', 'error', 'crashed', 'done'].includes(conversation.status)
+      ? conversation.status : 'idle';
+    this.sessionLastError = typeof conversation.lastError === 'string' ? conversation.lastError : null;
     if (typeof GoalState !== 'undefined') GoalState.restoreGoal(this.conversationId, conversation.goal);
     this.conversationTitle = conversation.title;
     this.workspaceName = conversation.workspaceName || '';
@@ -2170,6 +2200,8 @@ Use the latest relationship dossier and shared memories provided with this reque
       if (this.mode === 'code') this.codeWorkspacePath = conversation.workspacePath;
       this.host.api.webControlSetWorkDir(conversation.workspacePath);
     }
+    this.workspaceExplicit = conversation.workspaceExplicit === true;
+    this.hostWorkspacePath = this.workspaceExplicit ? conversation.hostWorkspacePath || null : null;
     if (this.mode === 'babe') await this.refreshBabeRelationship();
     // 恢复子代理聊天记录：从历史快照重建 subAgents（subAgent 实例不可恢复，置 null；
     // 模态框会回退读取 record.messages 快照渲染完整对话）。
@@ -2563,9 +2595,25 @@ Use the latest relationship dossier and shared memories provided with this reque
     }
   }
 
+  _requestNotice(key, fallback, values) {
+    if (typeof t === 'function') return t('ui.requestNotice.' + key, fallback, values);
+    return fallback.replace(/\{(\w+)\}/g, (text, name) => values?.[name] ?? text);
+  }
+
   async runIterations(runId) {
     let iterations = 0;
-    let namingReminder = false;
+    let omitImages = false;
+    let retriedUnnamedTool = false;
+    const requestMessages = () => {
+      const messages = this.contextManager.getMessages();
+      if (!omitImages) return messages;
+      return messages.map(message => Array.isArray(message.content) ? {
+        ...message,
+        content: message.content.map(part => ['image_url', 'input_image'].includes(part?.type)
+          ? { type: 'text', text: '[The model rejected the embedded image. Inspect the attached file with an image-capable tool if available.]' }
+          : part),
+      } : message);
+    };
     const hasGoal = () => ['chat', 'code'].includes(this.mode || 'chat') && typeof GoalState !== 'undefined' && GoalState.isGoalActive(this.conversationId || this.sessionKey);
     while (this.running && !this.stopped && runId === this.runId) {
       const limit = this.getIterationLimit();
@@ -2611,7 +2659,7 @@ Use the latest relationship dossier and shared memories provided with this reque
       this.contextManager.setSystemPrompt(this.getSystemPrompt());
       this.contextManager.admitContextUpdates();
       if (this.stopped || runId !== this.runId) break;
-      const messages = this.contextManager.getMessages();
+      const messages = requestMessages();
       const tools = this.getRuntimeToolSchemas();
       const streamEnabled = this.settings?.llm?.streamResponses !== false;
       // requestId 必须全局唯一：并发会话可能在同一毫秒启动同一轮循环，
@@ -2646,7 +2694,7 @@ Use the latest relationship dossier and shared memories provided with this reque
           }
           // Streaming failed — fall back to non-streaming
           if (this.onMessage) this.onMessage('stream-end', { requestId: reqId, content: '', fallback: true });
-          if (this.onMessage) this.onMessage('system', `流式请求失败，回退到普通模式：${streamErr.message || streamErr}`);
+          this.host.notify('toast', { type: 'info', message: this._requestNotice('streamFallback', '流式请求中断，正在重新请求。') });
           result = await this.host.api.chatLLM(messages, this._llmOptions({
             cibypAgentStep: true,
             tools: tools.length > 0 ? tools : undefined,
@@ -2680,6 +2728,12 @@ Use the latest relationship dossier and shared memories provided with this reque
         // are terminal, including refusals delivered inside an HTTP 200 stream.
         const errText = String(result.error || '');
         const kind = result.kind;
+        const imageRejection = !omitImages && /unsupported image_url|image.{0,35}(not supported|unsupported|invalid format)/i.test(errText) &&
+          messages.some(message => Array.isArray(message.content) && message.content.some(part => ['image_url', 'input_image'].includes(part?.type)));
+        if (imageRejection) {
+          omitImages = true;
+          this.host.notify('toast', { type: 'warning', message: this._requestNotice('imageRetry', '当前模型拒绝了图片。附件仍在，正在用文字和文件路径重试。') });
+        }
         const terminalFailure = result.retryable === false || ['auth', 'plugin-policy', 'provider-policy', 'privacy', 'aborted'].includes(kind);
         const MAX_PROVIDER_RETRIES = 3;
         // 可修复/可重试的客户端类错误：
@@ -2703,31 +2757,27 @@ Use the latest relationship dossier and shared memories provided with this reque
         }
 
         let retryCount = 0;
-        while (!result.ok && result.retryable !== false && !['auth', 'plugin-policy', 'provider-policy', 'privacy', 'aborted'].includes(result.kind) && retryCount < MAX_PROVIDER_RETRIES
+        while (!result.ok && (result.retryable !== false || (imageRejection && retryCount === 0)) && !['auth', 'plugin-policy', 'provider-policy', 'privacy', 'aborted'].includes(result.kind) && retryCount < MAX_PROVIDER_RETRIES
                && this.running && !this.stopped && runId === this.runId) {
           retryCount++;
-          let fixedNote = '';
           if (isFixableClient) {
             // 先尝试 sanitize 修复损坏的上下文（未配对的 tool_calls 等）
-            const sanitizationResult = this.contextManager.sanitize();
-            if (sanitizationResult.fixed) {
-              fixedNote = `，已自动修复 ${sanitizationResult.removedCount} 条问题消息（${sanitizationResult.beforeLength}→${sanitizationResult.afterLength}）`;
-            }
+            this.contextManager.sanitize();
             // 思考模型要求回传 reasoning_content：为缺失该字段的 assistant 消息补全后重试
             if (/reasoning_content|thinking mode|must be passed back/i.test(errText)) {
-              const reasoningFixed = this._repairReasoningContent();
-              if (reasoningFixed) fixedNote = '，已自动补全 reasoning_content 字段';
+              this._repairReasoningContent();
             }
           }
-          if (this.onMessage) {
-            this.onMessage('system', `⚠️ LLM 请求失败（${kind || 'unknown'}：${errText.slice(0, 120)}），正在自动重试（${retryCount}/${MAX_PROVIDER_RETRIES}）${fixedNote}`);
-          }
+          if (!imageRejection) this.host.notify('toast', {
+            type: 'info',
+            message: this._requestNotice('retry', '模型请求失败，正在重试（{current}/{total}）。', { current: retryCount, total: MAX_PROVIDER_RETRIES }),
+          });
           // 指数退避，避免对不稳定的提供商发起高频请求
           await new Promise(r => setTimeout(r, 800 * retryCount));
           if (this.stopped || runId !== this.runId) break;
           // 重新构建消息（修复可能已改动上下文）并用非流式重试，避免流式事件错乱
           this.contextManager.admitContextUpdates();
-          const retryMessages = this.contextManager.getMessages();
+          const retryMessages = requestMessages();
           const retryTools = this.getRuntimeToolSchemas();
           try {
             result = await this.host.api.chatLLM(retryMessages, this._llmOptions({
@@ -2741,16 +2791,15 @@ Use the latest relationship dossier and shared memories provided with this reque
             if (this.stopped || runId !== this.runId) break;
             result = { ok: false, error: retryErr.message || String(retryErr), kind: 'client' };
           }
+          if (imageRejection) break;
         }
         if (this.stopped || runId !== this.runId) break;
 
         // 重试仍失败：报错并停止
         if (!result.ok) {
           const errMsg = result.error || 'LLM 请求失败';
-          const retryNote = retryCount > 0 ? `（已自动修复并重试 ${retryCount} 次后仍失败）` : '';
+          const retryNote = retryCount > 0 ? this._requestNotice('failedRetries', '（重试 {count} 次后仍失败）', { count: retryCount }) : '';
           if (this.onMessage) this.onMessage('error', errMsg + retryNote);
-          try { this.contextManager.addSystemMessage(`[错误] ${errMsg}${retryNote}`, { type: 'error' }); }
-          catch { /* ignore */ }
           break;
         }
       }
@@ -2778,6 +2827,21 @@ Use the latest relationship dossier and shared memories provided with this reque
       if (!choice) { if (this.subagentPolicy) this.onMessage?.('error', 'Subagent model returned no completion'); break; }
 
       const assistantMsg = choice.message;
+      const reportedToolCalls = Array.isArray(assistantMsg.tool_calls) ? assistantMsg.tool_calls : [];
+      assistantMsg.tool_calls = reportedToolCalls.filter(call =>
+        typeof call?.id === 'string' && call.id.trim() &&
+        typeof call.function?.name === 'string' && call.function.name.trim());
+      if (!assistantMsg.tool_calls.length && !assistantMsg.content &&
+          (reportedToolCalls.length || choice.finish_reason === 'tool_calls')) {
+        if (!retriedUnnamedTool) {
+          retriedUnnamedTool = true;
+          continue;
+        }
+        this.onMessage?.('error', this._requestNotice('invalidTool', '模型连续返回无法识别的工具调用。请重试或切换模型。'));
+        break;
+      }
+      retriedUnnamedTool = false;
+      if (!assistantMsg.tool_calls.length) delete assistantMsg.tool_calls;
       if (this.stopped || runId !== this.runId) break;
       if (this.mode === 'babe' && assistantMsg.content) {
         const raw = assistantMsg.content;
@@ -3124,15 +3188,6 @@ Use the latest relationship dossier and shared memories provided with this reque
       const fr = choice.finish_reason;
       const hasContent = typeof assistantMsg.content === 'string' && assistantMsg.content.trim().length > 0;
       if (fr === 'stop' || fr === 'length' || fr === 'error' || (!fr && hasContent)) {
-        if (!namingReminder && fr !== 'length' && fr !== 'error' && !this.ephemeral && !this.isSubagent && this.workspacePath && this.host.api.workspaceInspect && this.settings?.tools?.renameWorkspace !== false) {
-          namingReminder = true;
-          const workspace = await this.host.api.workspaceInspect(this.workspacePath).catch(() => null);
-          if (workspace?.ok && workspace.needsNaming) {
-            this._mergeOptimizedSelection(['renameWorkspace']);
-            this.contextManager.addMessage({ role: 'user', content: 'System workspace check: saved files exist in this unnamed automatically created workspace. Call renameWorkspace now with a meaningful artifact-based name before completing. Keep the stable tool path; conversation title is unrelated.', metadata: { kind: 'context-update' } });
-            continue;
-          }
-        }
         if (this.subagentPolicy && (fr === 'length' || fr === 'error')) this.onMessage?.('error', `Subagent response ended with ${fr}; its report may be incomplete`);
         if (fr !== 'length' && fr !== 'error' && this.host.api.dsPluginTurnStopping) {
           const continuation = await this.host.api.dsPluginTurnStopping(this.sessionKey);
@@ -3326,7 +3381,7 @@ Use the latest relationship dossier and shared memories provided with this reque
       const FT_ALIAS = OPENCODE_TOOL_ALIASES;
       if (FT_ALIAS[name]) {
         const a = args || {};
-        if (name === 'bash' || name === 'shell') args = { ...a, script: String(a.command || a.script || ''), ...(name === 'shell' ? { cwd: a.workdir || null, yieldMs: a.background ? 1 : Math.max(1, Math.min(10000, Number(a.timeout) || 1000)) } : {}) };
+        if (name === 'bash' || name === 'shell') args = { ...a, script: String(a.command || a.script || ''), ...(name === 'shell' ? { cwd: a.workdir || null, mode: a.background === true ? 'background' : 'foreground', timeoutMs: a.timeout } : {}) };
         else if (name === 'write') args = { path: a.path || a.filePath, content: a.content };
         else if (name === 'read') args = { path: a.filePath || a.path, ...(a.encoding ? { encoding: a.encoding } : {}) };
         else if (name === 'edit') {
@@ -3669,28 +3724,31 @@ Use the latest relationship dossier and shared memories provided with this reque
           if (!writeRes.ok) return writeRes;
           return { ok: true, message: `已应用 ${appliedEdits.length} 处编辑${writeRes.encoding ? `（编码 ${writeRes.encoding}，换行 ${(writeRes.eol || 'lf').toUpperCase()}）` : ''}`, edits: appliedEdits };
         }
+        case 'presentInteractive': {
+          const spec = INTERACTIVE_CONTENT.validate(args);
+          return { ok: true, presentation: 'interactive-table', rowCount: spec.rows.length, title: spec.title };
+        }
         case 'presentFile': {
           // 解析工作目录相对路径：绝对路径原样使用，相对路径基于工作区拼接
           const relPath = args.path || '';
+          if (!relPath.trim()) return { ok: false, error: 'File path is required' };
           const fullPath = this._resolveWorkspacePath(relPath);
-          // 读取文件验证存在性
-          const readRes = await this.host.api.readFile(fullPath);
+          const readRes = await this.host.api.statPresentableFile(fullPath);
           if (!readRes.ok) {
             return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('file_not_exists', `文件不存在: ${relPath}`, { path: relPath }) : `文件不存在: ${relPath}` };
           }
           const filename = relPath.split(/[\\/]/).pop();
-          const fileSize = readRes.content ? readRes.content.length : 0;
-          // 通知 UI 创建呈递卡片（不阻塞 Agent 循环）
-          if (this.onMessage) {
-            this.onMessage('present-file', {
+          const artifact = {
               path: relPath,
               fullPath: fullPath,
               filename: filename,
               title: args.title || filename,
               description: args.description || '',
-              size: fileSize
-            });
-          }
+              size: readRes.size,
+              location: readRes.location
+          };
+          if (this.recordPresentedArtifact) await this.recordPresentedArtifact(artifact);
+          this.onMessage?.('present-file', artifact);
           return { ok: true, message: `文件 ${filename} 已呈递给用户` };
         }
         case 'readImageFile': {
@@ -3771,7 +3829,7 @@ Use the latest relationship dossier and shared memories provided with this reque
         case 'runShellScriptCode': {
           return await this._execWithSandboxEscalation('runShellScriptCode', (mode) =>
             this.host.api.runShell(args.script, args.cwd ? this._resolveWorkspacePath(args.cwd) : this._scriptCwd(), mode, {
-              jobId: args.jobId, action: args.action, yieldMs: args.yieldMs, sessionKey: this.sessionKey
+              jobId: args.jobId, action: args.action, yieldMs: args.yieldMs, mode: args.mode, timeoutMs: args.timeoutMs, sessionKey: this.sessionKey
             }));
         }
         case 'makeTerminal': {
@@ -3782,7 +3840,7 @@ Use the latest relationship dossier and shared memories provided with this reque
           if (result.ok) this.terminals.set(result.terminalId, true);
           return result;
         }
-        case 'runTerminalCommand': return await this.host.api.runTerminalCommand(args.terminalId, args.command);
+        case 'runTerminalCommand': return await this.host.api.runTerminalCommand(args.terminalId, args.command, args.yieldMs);
         case 'awaitTerminalCommand': return await this.host.api.awaitTerminalCommand(args.terminalId, args.command, args.timeoutMs);
         case 'killTerminal': {
           this.terminals.delete(args.terminalId);

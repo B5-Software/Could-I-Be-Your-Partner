@@ -559,6 +559,19 @@ class TuiApp {
       key.x <= toast.left + toast.width
     )
       return true;
+    const bottom = frame.hits?.scrollBottom;
+    if (
+      bottom &&
+      key.press &&
+      !key.motion &&
+      key.y === bottom.row &&
+      key.x >= bottom.from &&
+      key.x <= bottom.to
+    ) {
+      this.state.selection = null;
+      this.state.scrollOffset = 0;
+      return true;
+    }
     const hit = frame.hits?.modal.find((item) => item.row === key.y);
     const modal = this.state.modal;
     if (modal && hit) {
@@ -1142,6 +1155,14 @@ class TuiApp {
       return;
     }
     switch (event.type) {
+      case 'view-changed':
+        if (event.workspace) {
+          this.state.workspace = event.workspace.workspacePath;
+          this.state.hostWorkspace = event.workspace.hostPath || '';
+          this.state.workspaceError = '';
+          if (event.key === this.activeKey) this._reloadCustomCommands();
+        }
+        break;
       case 'update': {
         const s = event.state || {};
         const text =
@@ -1187,6 +1208,14 @@ class TuiApp {
         break;
       }
       case 'message': {
+        if (event.transient) {
+          this.state.toast = {
+            text: event.content?.message || String(event.content),
+            type: 'error',
+            expiresAt: this.clock() + 5000,
+          };
+          break;
+        }
         if (event.role === 'user') {
           this.pushEntry({ kind: 'user', text: event.content, attachments: event.attachments });
           break;

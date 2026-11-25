@@ -1,4 +1,4 @@
-  function showImageContextMenu(e, imageUrl) {
+  function showImageContextMenu(e, imageUrl, localPath = localPathFromUrl(imageUrl)) {
     // 移除已存在的菜单
     const existingMenu = document.querySelector('.image-context-menu');
     if (existingMenu) existingMenu.remove();
@@ -21,23 +21,23 @@
     const menuItems = [
       {
         icon: 'fa-magnifying-glass-plus',
-        label: '预览',
-        action: () => openImageModal(imageUrl, { path: localPathFromUrl(imageUrl) })
+        label: t('ui.image.preview', '图片预览'),
+        action: () => openImageModal(imageUrl, { path: localPath })
       },
       {
         icon: 'fa-copy',
-        label: '复制图片',
+        label: t('ui.image.copy', '复制图片'),
         action: () => copyChatImage(imageUrl)
       },
       {
         icon: 'fa-floppy-disk',
-        label: '另存为',
-        action: () => saveChatImage(imageUrl)
+        label: t('ui.image.saveTitle', '保存图片'),
+        action: () => saveChatImage(imageUrl, localPath)
       },
       {
         icon: 'fa-folder-open',
-        label: '打开所在文件夹',
-        action: () => openImageInFolder(imageUrl)
+        label: t('ui.image.openFolder', '打开所在文件夹'),
+        action: () => openImageInFolder(localPath || imageUrl)
       }
     ];
 
@@ -51,7 +51,7 @@
         gap: 10px;
         transition: background 0.2s;
       `;
-      menuItem.innerHTML = `<i class="fa-solid ${item.icon}" style="width:16px"></i><span>${item.label}</span>`;
+      menuItem.innerHTML = `<i class="fa-solid ${item.icon}" style="width:16px"></i><span>${escapeHtml(item.label)}</span>`;
 
       menuItem.addEventListener('mouseenter', () => {
         menuItem.style.background = 'var(--bg-hover)';

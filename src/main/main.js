@@ -153,7 +153,7 @@ const remoteBackend = require('./core/remote-backend').createRemoteBackend();
 const ipcMain = createIpcRouter(electronIpcMain, {
   validateSender: windowSecurity.validateSender,
   routeHandler: (channel, handler) => {
-    const routed = ROUTE_CHANNELS.has(channel) ? createRoutedHandler(channel, handler, { getVmService: () => vmService, isLocationVm: () => vmLocationActive() }) : handler;
+    const routed = ROUTE_CHANNELS.has(channel) ? createRoutedHandler(channel, handler, { getVmService: () => vmService, isLocationVm: () => vmLocationActive(), getSettings: () => settings }) : handler;
     return remoteBackend.route(channel, (event, ...args) => require('./vm/tool-location').withToolLocation(() => vmService, async () => {
       const editorResult = codeOSSService ? await codeOSSService.interceptFile(channel, args) : null;
       return editorResult === null ? routed(event, ...args) : editorResult;
@@ -865,6 +865,25 @@ ipcMain.handle('app:startup-runtime', () => {
   return new Promise(resolve => startupRuntimeWaiters.add(resolve));
 });
 
+function raiseMainWindowOnWin32() {
+  if (
+    process.platform !== 'win32' ||
+    isQuitting ||
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    !mainWindow.isVisible() ||
+    mainWindow.getOpacity() === 0
+  ) {
+    return;
+  }
+  try {
+    mainWindow.setAlwaysOnTop(true);
+    mainWindow.moveTop();
+    mainWindow.focus();
+    mainWindow.setAlwaysOnTop(false);
+  } catch { /* ignore */ }
+}
+
 /** 尝试显示主窗口；VM 门控未放行时返回 false（调用方无需处理） */
 function tryShowMainWindow() {
   if (!vmRuntimeGate.required || vmRuntimeGate.ready) {
@@ -876,8 +895,12 @@ function tryShowMainWindow() {
   if (!mainRendererReady) return false;
   if (vmRuntimeGate.required && !vmRuntimeGate.ready) return false;
   mainWindowShownOnce = true;
+  if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
-  try { mainWindow.focus(); } catch { /* ignore */ }
+  if (process.platform === 'win32') raiseMainWindowOnWin32();
+  else {
+    try { mainWindow.focus(); } catch { /* ignore */ }
+  }
   console.log('[vm] Main window shown' + (vmRuntimeGate.required ? ' (VM startup gate released)' : ''));
   return true;
 }
@@ -990,7 +1013,11 @@ function closeSplash() {
     splashWindow = null;
     return;
   }
-  splashWindow.once('closed', createAppTray);
+  try { splashWindow.setAlwaysOnTop(false); } catch { /* ignore */ }
+  splashWindow.once('closed', () => {
+    createAppTray();
+    raiseMainWindowOnWin32();
+  });
   splashWindow.close();
 }
 
@@ -1392,7 +1419,8 @@ function showWindowFromTray() {
   }
   if (mainWindow.isMinimized()) mainWindow.restore();
   if (!mainWindow.isVisible()) mainWindow.show();
-  mainWindow.focus();
+  if (process.platform === 'win32') raiseMainWindowOnWin32();
+  else mainWindow.focus();
   if (process.platform === 'darwin') {
     try { app.dock.show(); } catch {}
   }
@@ -2296,7 +2324,7 @@ ipcMain.handle('knowledge:update', (_, { id, data }) => {
 });
 
 // files: explicit dependencies; mutable app state is read through getters.
-require('./ipc/files')({
+const filesIpc = require('./ipc/files')({
   ipcMain,
   fs,
   normalizeEncodingName,
@@ -2304,8 +2332,10 @@ require('./ipc/files')({
   detectFileEncoding,
   writeTextFileWithEncoding,
   path,
-  readTextWithEncoding
+  readTextWithEncoding,
+  getSettings: () => settings
 });
+app.on('will-quit', () => filesIpc.dispose());
 
 // ---- IPC: Terminal Management ----
 // 终端架构：
@@ -3129,6 +3159,9 @@ ipcMain.handle('web:offscreenRenderedContent', async (_, options = {}) => {
 });
 
 // ---- IPC: Tarot ----
+const entropyPools = new (require('./services/entropy-pool').EntropyPools)({
+  getSettings: () => settings, hardware: tarotTools.getTrngDraw,
+});
 
 ipcMain.handle('app:is-no-tarot-build', () => {
   try {
@@ -3154,7 +3187,11 @@ ipcMain.handle('tarot:draw', async (_, options) => {
     const count = spread.cardCount;
     const source = settings.entropy?.source || 'csprng';
     let cards;
-    if (source === 'trng') {
+    if (source === 'pool' && entropyPools.selection()) {
+      const mixed = await entropyPools.use(undefined, options?.context || '', random =>
+        tarotTools.drawTarotSpreadCSPRNG(count, random, 'Entropy pool'));
+      cards = mixed.result;
+    } else if (source === 'trng') {
       cards = await tarotTools.drawTarotSpreadTRNG(count, settings.entropy || {});
     } else {
       cards = tarotTools.drawTarotSpreadCSPRNG(count);
@@ -3219,6 +3256,10 @@ ipcMain.handle('trng:test', async () => {
 ipcMain.handle('game:trngGetSeed', async () => {
   const source = settings.entropy?.source || 'csprng';
   const crypto = require('crypto');
+  if (source === 'pool' && entropyPools.selection()) {
+    const { result } = await entropyPools.use(undefined, 'game seed', random => random(4).readUInt32BE(0));
+    return { ok: true, seed: result, entropySource: 'Entropy pool' };
+  }
   if (source === 'trng') {
     try {
       const raw = await tarotTools.getTrngDraw(settings.entropy || {});
@@ -3634,11 +3675,12 @@ ipcMain.handle('dialog:pickLocalFiles', async (event, options = {}) => {
 
 ipcMain.handle('dialog:openFile', async (_, options = {}) => {
   try {
-    const properties = ['openFile'];
+    const properties = options.directory && !options.allowFiles ? ['openDirectory'] : ['openFile'];
     if (options.multiple) properties.push('multiSelections');
-    if (options.directory) properties.push('openDirectory');
-    const result = await toolDialog.showOpenDialog(mainWindow, {
-      title: options.title || '选择文件',
+    if (options.directory && options.allowFiles) properties.push('openDirectory');
+    const picker = options.directory && options.hostDirectory === true ? dialog : toolDialog;
+    const result = await picker.showOpenDialog(mainWindow, {
+      title: options.title || (options.directory ? '选择文件夹' : '选择文件'),
       defaultPath: options.defaultPath,
       filters: options.filters,
       properties
@@ -3908,7 +3950,7 @@ ipcMain.handle('babeHistory:save', (_, conversation, options) => {
   if (!conversation || !conversation.id) return { ok: false, error: 'invalid conversation' };
   conversation.updatedAt = new Date().toISOString();
   if (!conversation.createdAt) conversation.createdAt = new Date().toISOString();
-  _externalizeHistoryImages(conversation);
+  conversation = _externalizeHistoryImages(conversation);
   queueHistorySave('babe:' + conversation.id, dataPath(babeHistoryDir, conversation.id, '.json'), conversation, options);
   _putHistoryIndexEntry(_historyIndexFile('babe', babeHistoryDir), conversation.id, _babeHistoryMeta(conversation.id, conversation));
   return { ok: true, queued: true };
@@ -4525,7 +4567,9 @@ app.whenReady().then(async () => {
   // terminal and browser clients only attach views to this owner.
   const { createAgentRuntime, INTERACTION_POLICY } = require('./agent-runtime');
   agentRuntime = createAgentRuntime({ ipcMain, eventBus, getSettings: () => settings,
+    artifactFile: path.join(dataDir, 'presented-artifacts.jsonl'),
     interactionPolicy: process.env.CIBYP_AUTO_APPROVE === '1' ? INTERACTION_POLICY.AUTO_APPROVE : INTERACTION_POLICY.PROMPT });
+  agentRuntime.entropyPools = entropyPools;
   nativeSubagents = new (require('./services/native-subagents').NativeSubagents)({ file: path.join(dataDir, 'native-subagents.json'), host: pluginManager.host, getRuntime: () => agentRuntime, sync: syncOwnerAgents });
   agentRuntime.onEvent(event => {
     nativeSubagents.event(event);
@@ -4659,6 +4703,7 @@ app.on('before-quit', (event) => {
   if (quitPreparation) return;
   quitPreparation = (async () => {
     agentRuntime?.dispose();
+    await agentRuntime?.persistInterruptedSessions();
     torRemote.stop();
     networkPrivacy.stop();
     closeSplash();

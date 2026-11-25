@@ -334,7 +334,7 @@ async function fetchLLMWithRetry(cfg) {
  * 处理 OpenAI Responses API 的单个 SSE 事件（纯函数，便于单测）。
  * state 结构：{ fullContent, fullReasoning, toolCalls, finishReason, usage, responsesToolBuffer, finalizedToolIds, onChunk?, requestId? }
  * 事件类型：response.output_text.delta / response.reasoning_summary_text.delta /
- *          response.function_call_arguments.delta(.done) / response.output_item.done / response.completed
+ *          response.function_call_arguments.delta(.done) / response.output_item.added(.done) / response.completed
  * @param {object} state - 聚合状态（会被就地修改）
  * @param {object} parsed - 已解析的 SSE 事件 JSON
  */
@@ -365,15 +365,15 @@ function processResponsesEvent(state, parsed) {
     if (!entry.name) entry.name = parsed.name || '';
     if (parsed.arguments) entry.argsBuffer = parsed.arguments;
     finalizeResponsesToolCall(state, id);
-  } else if (type === 'response.output_item.done' && parsed.item && parsed.item.type === 'function_call') {
+  } else if (['response.output_item.added', 'response.output_item.done'].includes(type) && parsed.item?.type === 'function_call') {
     const item = parsed.item;
     const id = item.id;
     const entry = state.responsesToolBuffer[id] || (state.responsesToolBuffer[id] = { call_id: '', name: '', argsBuffer: '' });
     if (!entry.call_id) entry.call_id = item.call_id || '';
     if (!entry.name) entry.name = item.name || '';
     // 部分实现直接带完整 arguments（无 delta 流），此时补全
-    if (item.arguments && !state.finalizedToolIds.has(id)) {
-      entry.argsBuffer = item.arguments;
+    if (type === 'response.output_item.done' && (typeof item.arguments === 'string' || entry.argsBuffer)) {
+      if (item.arguments) entry.argsBuffer = item.arguments;
       finalizeResponsesToolCall(state, id);
     }
   } else if (type === 'response.completed') {
@@ -381,7 +381,11 @@ function processResponsesEvent(state, parsed) {
     const completedItems = (resp.output || []).filter((item) => item?.type === 'reasoning');
     if (completedItems.length) state.reasoningItems = completedItems;
     if (!state.fullContent) state.fullContent = (resp.output || []).filter((item) => item?.type === 'message').flatMap((item) => item.content || []).filter((part) => part.type === 'output_text').map((part) => part.text || '').join('');
-    for (const item of resp.output || []) if (item.type === 'function_call') processResponsesEvent(state, { type: 'response.output_item.done', item });
+    for (const item of resp.output || []) {
+      if (item.type !== 'function_call') continue;
+      processResponsesEvent(state, { type: 'response.output_item.done', item });
+      finalizeResponsesToolCall(state, item.id);
+    }
     if (resp.status === 'incomplete') state.finishReason = 'length';
     else if (resp.status === 'failed') state.finishReason = 'error';
     else if (resp.status) state.finishReason = 'stop';
@@ -394,11 +398,11 @@ function processResponsesEvent(state, parsed) {
 
 function finalizeResponsesToolCall(state, id) {
   if (state.finalizedToolIds.has(id)) return;
-  state.finalizedToolIds.add(id);
   const entry = state.responsesToolBuffer[id];
-  if (!entry) return;
+  if (typeof entry?.name !== 'string' || !entry.name.trim() || typeof entry.call_id !== 'string' || !entry.call_id.trim()) return;
+  state.finalizedToolIds.add(id);
   state.toolCalls.push({
-    id: entry.call_id || id,
+    id: entry.call_id,
     type: 'function',
     function: { name: entry.name || '', arguments: entry.argsBuffer || '{}' }
   });
@@ -620,6 +624,10 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
   // 此时按"有工具调用→tool_calls，否则→stop"收敛，绝不把 null 抛给 agentLoop。
   if (!finishReason) {
     finishReason = toolCalls.length ? 'tool_calls' : 'stop';
+  }
+  if (finishReason === 'stop' && !fullContent && !toolCalls.length && Object.keys(responsesToolBuffer).length) {
+    // Let the agent recover once instead of silently ending an empty turn.
+    finishReason = 'tool_calls';
   }
   usage = TokenUsage.normalize(usage, transport);
   if (info && info.label) {

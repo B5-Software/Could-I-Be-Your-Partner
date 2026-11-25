@@ -96,7 +96,23 @@ test(
       rows: 24,
       env: { ...process.env, TERM: 'xterm' },
     });
-    t.after(() => term.kill());
+    const exited = Promise.withResolvers();
+    term.onExit(() => {
+      require('../../src/main/core/terminal-pty-cleanup').releaseExitedPty(term);
+      exited.resolve(true);
+    });
+    t.after(async () => {
+      term.write('exit\r');
+      let timeout;
+      const didExit = await Promise.race([
+        exited.promise,
+        new Promise((resolve) => {
+          timeout = setTimeout(() => resolve(false), 3000);
+        }),
+      ]);
+      clearTimeout(timeout);
+      if (!didExit) term.kill();
+    });
     const tracker = new TerminalCommand(term, shell);
     term.onData((data) => tracker.append(data));
     term.onExit(() => tracker.end());

@@ -265,12 +265,19 @@ class SuperAgentService {
         threadId = identity(input.threadId || 'thread-' + randomUUID());
       const mode = input.mode || 'chat';
       if (!['chat', 'code'].includes(mode)) throw Error('SUPER_INVALID_INPUT');
+      if (input.workspacePath !== undefined && typeof input.workspacePath !== 'string')
+        throw Error('SUPER_INVALID_INPUT');
+      const workspacePath =
+        mode === 'code' && input.workspacePath && input.workspacePath.trim()
+          ? text(input.workspacePath, 1024)
+          : '';
       const scope = observation ? 'observe:' + input.source : 'owner:' + mode;
       const old = this.store.state.events.find((e) => e.operationId === operationId);
       const fingerprint = digest({
         text: body,
         mode,
         taskId: input.taskId || '',
+        ...(workspacePath ? { workspacePath } : {}),
         source: observation ? input.source : 'local',
       });
       if (old) {
@@ -286,6 +293,7 @@ class SuperAgentService {
           threadId,
           scope,
           mode,
+          ...(workspacePath ? { workspacePath } : {}),
           text: body,
           source: observation ? input.source : 'local',
           observation,
@@ -358,6 +366,14 @@ class SuperAgentService {
   }
   attach(s, t, e) {
     if (t.status === 'stopped') throw Error('SUPER_TASK_STOPPED');
+    if (
+      e.workspacePath &&
+      t.workspacePath &&
+      t.workspacePath !== e.workspacePath &&
+      t.hostWorkspacePath !== e.workspacePath
+    )
+      throw Error('SUPER_SCOPE_FORBIDDEN');
+    if (t.mode === 'code' && !t.workspacePath && e.workspacePath) t.workspacePath = e.workspacePath;
     e.taskId = t.id;
     e.status = 'assigned';
     t.inputIds.push(e.id);
@@ -419,6 +435,13 @@ class SuperAgentService {
         if (input.action === 'attach') {
           t = this.find(s, input.taskId);
           if (t.scope !== e.scope || t.status === 'stopped') throw Error('SUPER_SCOPE_FORBIDDEN');
+          if (
+            e.workspacePath &&
+            t.workspacePath &&
+            t.workspacePath !== e.workspacePath &&
+            t.hostWorkspacePath !== e.workspacePath
+          )
+            throw Error('SUPER_SCOPE_FORBIDDEN');
         } else {
           if (s.tasks.length >= 1000) throw Error('SUPER_STORAGE_LIMIT');
           t = {
@@ -441,7 +464,8 @@ class SuperAgentService {
             evidence: [],
             workerKey: '',
             conversationId: '',
-            workspacePath: '',
+            workspacePath: e.workspacePath || '',
+            hostWorkspacePath: '',
           };
           s.tasks.push(t);
         }

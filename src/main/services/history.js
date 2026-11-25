@@ -128,37 +128,48 @@ module.exports = function createHistoryService({
   function _externalizeHistoryImages(conversation) {
     if (!conversation || !Array.isArray(conversation.messages)) return conversation;
     const dir = dataPath(historyImagesDir, String(conversation.id || 'unknown'));
-    let counter = 0;
-    for (const msg of [
-      ...conversation.messages,
-      ...(conversation.workingContext?.entries || []).map((entry) => entry.message).filter(Boolean),
-    ]) {
-      if (!Array.isArray(msg && msg.content)) continue;
-      for (const part of msg.content) {
+    const { createHash } = require('node:crypto');
+    const { pathToFileURL } = require('node:url');
+    const saved = new Map();
+    function externalize(msg) {
+      if (!Array.isArray(msg?.content)) return msg;
+      const content = msg.content.map((part) => {
         const url = part && part.image_url && part.image_url.url;
-        if (typeof url !== 'string' || !url.startsWith('data:')) continue;
+        if (typeof url !== 'string' || !url.startsWith('data:')) return part;
         try {
-          const m = /^data:([^;,]+);base64,(.*)$/s.exec(url);
-          if (!m) continue;
-          const file = path.join(dir, `img-${Date.now()}-${counter++}.${_historyImageExt(m[1])}`);
-          fs.mkdirSync(dir, { recursive: true });
-          if (!fs.existsSync(file)) fs.writeFileSync(file, Buffer.from(m[2], 'base64'));
-          const { pathToFileURL } = require('url');
-          part.image_url = {
-            url: pathToFileURL(file).href,
-            _cibypHistoryFile: true,
-          };
+          let ref = saved.get(url);
+          if (!ref) {
+            const m = /^data:(image\/[^;,]+);base64,(.*)$/s.exec(url);
+            if (!m) return part;
+            const digest = createHash('sha256').update(url).digest('hex');
+            const file = path.join(dir, 'img-' + digest + '.' + _historyImageExt(m[1]));
+            fs.mkdirSync(dir, { recursive: true });
+            if (!fs.existsSync(file)) fs.writeFileSync(file, Buffer.from(m[2], 'base64'));
+            ref = { url: pathToFileURL(file).href, _cibypHistoryFile: true, mime: m[1] };
+            saved.set(url, ref);
+          }
+          return { ...part, image_url: { ...part.image_url, ...ref } };
         } catch {
-          /* 失败保留原始数据 */
+          return part;
         }
-      }
+      });
+      return { ...msg, content };
     }
-    return conversation;
+    const snapshot = { ...conversation, messages: conversation.messages.map(externalize) };
+    if (Array.isArray(conversation.workingContext?.entries))
+      snapshot.workingContext = {
+        ...conversation.workingContext,
+        entries: conversation.workingContext.entries.map((entry) =>
+          entry?.message ? { ...entry, message: externalize(entry.message) } : entry,
+        ),
+      };
+    return snapshot;
   }
 
   function _rehydrateHistoryImages(conversation) {
     if (!conversation || !Array.isArray(conversation.messages)) return conversation;
     const { fileURLToPath } = require('url');
+    const dir = dataPath(historyImagesDir, String(conversation.id || 'unknown'));
     for (const msg of [
       ...conversation.messages,
       ...(conversation.workingContext?.entries || []).map((entry) => entry.message).filter(Boolean),
@@ -169,7 +180,7 @@ module.exports = function createHistoryService({
         if (!iu || !iu._cibypHistoryFile || typeof iu.url !== 'string') continue;
         try {
           const p = fileURLToPath(iu.url);
-          if (!fs.existsSync(p)) continue;
+          if (path.dirname(p) !== dir || !fs.existsSync(p) || !fs.lstatSync(p).isFile()) continue;
           const ext = path.extname(p).slice(1).toLowerCase();
           const mime =
             ext === 'jpg'
@@ -182,7 +193,11 @@ module.exports = function createHistoryService({
                     ? 'image/gif'
                     : 'application/octet-stream';
           part.image_url = {
-            url: `data:${mime};base64,` + fs.readFileSync(p).toString('base64'),
+            url:
+              'data:' +
+              (typeof iu.mime === 'string' && /^image\/[\w.+-]+$/.test(iu.mime) ? iu.mime : mime) +
+              ';base64,' +
+              fs.readFileSync(p).toString('base64'),
           };
         } catch {
           /* ignore */
@@ -231,8 +246,7 @@ module.exports = function createHistoryService({
             if (fs.statSync(filePath).size < 256 * 1024) continue;
             const raw = fs.readFileSync(filePath, 'utf8');
             if (!raw.includes('"data:')) continue;
-            const data = JSON.parse(raw);
-            _externalizeHistoryImages(data);
+            const data = _externalizeHistoryImages(JSON.parse(raw));
             try {
               fs.copyFileSync(filePath, path.join(backupRoot, path.basename(dir) + '-' + files[i]));
             } catch {
@@ -481,7 +495,7 @@ module.exports = function createHistoryService({
     if (!conversation || !conversation.id) return { ok: false, error: 'invalid conversation' };
     conversation.updatedAt = new Date().toISOString();
     if (!conversation.createdAt) conversation.createdAt = new Date().toISOString();
-    _externalizeHistoryImages(conversation);
+    conversation = _externalizeHistoryImages(conversation);
     queueHistorySave(
       'history:' + conversation.id,
       dataPath(historyDir, conversation.id, '.json'),

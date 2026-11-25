@@ -1097,6 +1097,18 @@ ipcMain.once('app:renderer-ready', (event) =>
       await until(
         `document.querySelector('.quant-native-paper [data-np-history]').textContent.includes('FOK')`,
       );
+      await js(
+        "(() => { const form = document.querySelector('.quant-native-paper [data-np-order]'); form.elements.timeInForce.value = 'gtc'; form.requestSubmit(); })()",
+      );
+      await until(
+        "document.querySelector('.quant-native-paper [data-np-error]').textContent.includes('仅挂单委托会立即成交')&&!document.querySelector('.quant-native-paper [data-np-order] [type=submit]').disabled",
+      );
+      assert.equal(
+        await js(
+          "document.querySelector('.quant-native-paper [data-np-order] [name=price]').value",
+        ),
+        '2334',
+      );
       await shot('quant-native-paper-orders-' + theme + '.png');
       await js("document.querySelector('.quant-native-paper [data-np=executions]').click()");
       await until("document.querySelectorAll('.quant-native-paper tbody tr').length>=3");

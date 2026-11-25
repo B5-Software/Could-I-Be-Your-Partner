@@ -82,6 +82,28 @@ test('binary RPC values survive serialization and cannot reuse an id with differ
   );
 });
 
+test('local owner client recovers a dropped reply without executing the RPC twice', async (t) => {
+  const { clientFor } = require('../../src/tui/backend-connect');
+  const token = 'e'.repeat(64);
+  let calls = 0;
+  const server = new BackendServer({
+    eventBus: createEventBus(),
+    token,
+    dispatch: () => ++calls,
+  });
+  const address = await server.start();
+  t.after(() => server.stop());
+  server.server.prependOnceListener('request', (req, response) => {
+    response.end = () => req.socket.destroy();
+  });
+
+  const client = clientFor({ ...address, token });
+  t.after(() => client.close());
+  assert.equal(await client.request('fixture'), 1);
+  assert.equal(calls, 1);
+  assert.throws(() => clientFor({ url: 'http://fixture.invalid' }), /Invalid local backend/);
+});
+
 test('workspace downloads require authentication and dispatch through the selected filesystem', async (t) => {
   const token = 'c'.repeat(64),
     received = [];

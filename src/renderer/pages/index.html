@@ -232,6 +232,9 @@
               <button class="btn-icon" id="btn-open-workspace" title="打开工作目录">
                 <i class="fa-solid fa-folder-open"></i>
               </button>
+              <button class="btn-icon" id="btn-choose-chat-workspace" type="button" title="选择 Chat 工作目录" data-i18n-title="ui.workspace.chooseChat" data-i18n-aria-label="ui.workspace.chooseChat">
+                <i class="fa-solid fa-folder-tree" aria-hidden="true"></i>
+              </button>
               <button class="btn-icon" id="btn-new-chat" title="新对话">
                 <i class="fa-solid fa-plus"></i>
               </button>
@@ -729,6 +732,8 @@
             <button class="settings-tab" data-tab="llm"><i class="fa-solid fa-microchip"></i> 模型与连接</button>
             <button class="settings-tab" data-tab="decision"><i class="fa-solid fa-scale-balanced"></i> System One 决策模型</button>
             <button class="settings-tab" data-tab="context"><i class="fa-solid fa-compress"></i> Token 与上下文</button>
+            <button class="settings-tab" data-tab="artifacts"><i class="fa-solid fa-box-archive"></i> <span data-i18n="ui.artifacts.title">产物</span></button>
+            <button class="settings-tab" data-tab="history-management"><i class="fa-solid fa-clock-rotate-left"></i> <span data-i18n="ui.archive.title">聊天记录管理</span></button>
             <button class="settings-tab" data-tab="image"><i class="fa-solid fa-image"></i> 生图</button>
             <div class="settings-tab-group" data-i18n="ui.settings.groups.usage">用量与成本</div>
             <button class="settings-tab" data-tab="usage"><i class="fa-solid fa-chart-bar"></i> 用量统计</button>
@@ -789,7 +794,7 @@
               <div class="settings-group">
                 <div class="automatic-memory-heading"><h3>记住的事</h3><span id="automatic-memory-status" role="status" aria-live="polite"></span></div>
                 <div class="automatic-memory-toolbar"><input id="automatic-memory-search" type="search" placeholder="搜索自动记忆…" aria-label="搜索自动记忆"><button id="automatic-memory-refresh" class="btn-secondary" type="button"><i class="fa-solid fa-arrows-rotate"></i> 刷新</button><button id="automatic-memory-clear" class="btn-secondary" type="button">清空自动记忆</button></div>
-                <p class="setting-hint">与长期记忆和聊天记录分别保存。删除聊天不会自动删除这里的记忆；手动编辑的内容不会被自动覆盖。</p>
+                <p class="setting-hint">独立保存，删聊天不影响这里的记录，手动改过的内容也不会被覆盖。</p>
                 <div id="automatic-memory-list" class="automatic-memory-list" aria-live="polite"></div>
               </div>
             </div>
@@ -1017,7 +1022,7 @@
                   <div class="setting-item"><label for="claude-login-code" data-i18n="ui.claudeSubscription.code">浏览器返回的授权码</label><input type="password" id="claude-login-code" autocomplete="off"></div>
                   <button class="btn-secondary" id="btn-claude-code" data-i18n="ui.claudeSubscription.submit">完成授权</button>
                 </details>
-                <p class="setting-hint" data-i18n="ui.claudeSubscription.billing">此通道不使用 API Key，不主动开启额外用量；实际额度及账号已有的额外用量设置以 Claude 服务端为准。</p>
+                <p class="setting-hint" data-i18n="ui.claudeSubscription.billing">直接走 Claude 订阅额度，不使用 API Key；额度与超额规则按你的 Claude 账号设置生效。</p>
               </div>
               <div class="settings-group" id="chatgpt-account-group">
   <h3><i class="fa-solid fa-user-shield"></i> ChatGPT / Codex 账号</h3>
@@ -1272,10 +1277,56 @@
               </div>
             </div>
 
+            <div class="settings-panel" data-tab="history-management">
+              <section class="settings-group" id="settings-history-management">
+                <h3 data-i18n="ui.archive.title">聊天记录管理</h3>
+                <form class="artifacts-search" data-history-search>
+                  <label for="history-management-query" data-i18n="ui.archive.query">搜索会话标题</label>
+                  <input id="history-management-query" type="search" maxlength="200">
+                  <button class="btn-primary" type="submit" data-i18n="ui.artifacts.search">搜索</button>
+                </form>
+                <ul class="history-management-list"></ul>
+                <div class="history-management-actions">
+                  <button class="btn-secondary" type="button" data-history-more hidden data-i18n="ui.archive.more">更多会话</button>
+                  <button class="btn-secondary" type="button" data-history-action="select" data-i18n="ui.archive.select">选择当前列表</button>
+                  <button class="btn-secondary" type="button" data-history-action="clear" data-i18n="ui.archive.clear">取消选择</button>
+                  <span data-history-count></span>
+                </div>
+                <div class="history-management-actions">
+                  <label for="history-management-format" data-i18n="ui.archive.format">导出格式</label>
+                  <select id="history-management-format"><option>Markdown</option><option>JSON</option><option>SQL</option><option>TXT</option></select>
+                  <button class="btn-secondary" type="button" data-history-action="export" data-i18n="ui.archive.export">导出选中</button>
+                  <button class="btn-secondary" type="button" data-history-action="backup" data-i18n="ui.archive.backup">明文备份</button>
+                  <button class="btn-secondary" type="button" data-history-action="encrypted" data-i18n="ui.archive.encrypted">加密备份</button>
+                  <button class="btn-danger" type="button" data-history-action="delete" data-i18n="ui.archive.delete">删除选中</button>
+                </div>
+                <form class="history-management-actions" data-history-restore>
+                  <label><span data-i18n="ui.archive.password">备份密码</span><input name="password" type="password" autocomplete="new-password"></label>
+                  <label><span data-i18n="ui.archive.backupFile">备份文件</span><input name="file" type="file" accept=".json,.cibyp-backup"></label>
+                  <button class="btn-primary" type="submit" data-i18n="ui.archive.restore">还原为新副本</button>
+                </form>
+                <p class="setting-hint" data-i18n="ui.archive.scope">备份包含聊天记录。工作区文件与外部附件单独保存。Code 列表包含应用已登记的工作区。</p>
+                <p class="setting-hint" role="status" aria-live="polite"></p>
+              </section>
+            </div>
+            <div class="settings-panel" data-tab="artifacts">
+              <section class="settings-group" id="settings-presented-artifacts">
+                <h3 data-i18n="ui.artifacts.title">产物</h3>
+                <form class="artifacts-search">
+                  <label for="artifact-query" data-i18n="ui.artifacts.query">搜索文件、路径或会话</label>
+                  <input id="artifact-query" type="search" maxlength="200" autocomplete="off">
+                  <button class="btn-primary" type="submit" data-i18n="ui.artifacts.search">搜索</button>
+                </form>
+                <p class="setting-hint" role="status"></p>
+                <ul class="artifacts-list"></ul>
+                <button type="button" class="btn-secondary" data-artifact-more hidden data-i18n="ui.artifacts.more">更早的文件</button>
+              </section>
+            </div>
             <div class="settings-panel" data-tab="context">
               <div class="settings-group">
                 <h3>Agent 执行</h3>
                 <div class="setting-item"><label for="setting-agent-iteration-limit">Agent 循环轮数上限</label><input id="setting-agent-iteration-limit" type="number" min="0" max="9007199254740991" step="1" value="1024"><p class="setting-hint">每次执行默认最多 1024 轮。填 0 表示无上限。适用于聊天、编程、Babe、任务目标及子 Agent。</p></div>
+                <div class="setting-item"><label for="setting-agent-restrict-disk-scan">禁止全盘扫描</label><div class="toggle-switch"><input type="checkbox" id="setting-agent-restrict-disk-scan" data-setting="agent.restrictDiskScan"><span class="toggle-slider"></span></div><p class="setting-hint">开启后禁止 Agent 对磁盘根目录、用户主目录或系统目录直接递归搜索，要求先读取目录结构再搜索小范围子目录。</p></div>
               </div>
               <div class="settings-group" id="token-limits-group">
                 <h3><i class="fa-solid fa-sliders"></i> Token 分配</h3>
@@ -1288,7 +1339,7 @@
                 <div class="setting-item">
                   <label>单次输出上限（tokens）</label>
                   <input type="number" id="setting-llm-max-response" min="256" max="100000" value="8192">
-                <p class="setting-hint">控制每次请求最多生成多少 token，支持时包含思考 token。输出空间会从上下文中预留，实际上限以当前模型容量为准。</p></div>
+                <p class="setting-hint">单次回复的最大输出 token（含思考过程），会从上下文中预留空间。</p></div>
               </div>
               <div class="settings-group">
                 <h3><i class="fa-solid fa-toolbox"></i> 工具上下文</h3>
@@ -1519,7 +1570,7 @@
                     <option value="weekly">周限额</option>
                     <option value="monthly">月限额</option>
                   </select>
-                  <p class="setting-hint">订阅额度来自服务端；API 等效消费仅供比较，不代表订阅扣费。没有对应额度时显示不可用。</p>
+                  <p class="setting-hint">订阅额度直接读取官方数据；API 等效消费仅为按价目表估算的参考值。</p>
                 </div>
                 <div id="subscription-usage-settings" class="setting-item" hidden>
                   <div class="subscription-usage-heading"><strong>订阅额度</strong><button class="btn-secondary btn-sm" id="btn-subscription-usage-refresh" type="button">刷新订阅额度</button></div>
@@ -2901,7 +2952,7 @@
                 <div class="setting-item">
                   <label class="setting-label" for="setting-vm-quick-resume">VM 快速启停</label>
                   <div class="toggle-switch"><input type="checkbox" id="setting-vm-quick-resume" data-setting="runtime.vm.quickResume" checked><span class="toggle-slider"></span></div>
-                  <p class="setting-hint">默认开启。停止或退出时保存内存与设备状态，下次直接恢复；首次启动、配置变化或恢复失败时正常开机。保存状态占用额外磁盘空间，所需时间取决于内存大小与磁盘速度。</p>
+                  <p class="setting-hint">停止或退出时保存快照，下次直接恢复；首次启动或修改配置时正常冷启动（会占额外磁盘空间）。</p>
                 </div>
                 <div class="setting-item">
                   <label class="setting-label">镜像变体</label>
@@ -3113,7 +3164,7 @@
                 <div class="setting-item"><label for="setting-privacy-tor-auto" data-i18n="ui.networkPrivacy.auto">后台启动时自动连接</label><div class="toggle-switch"><input type="checkbox" id="setting-privacy-tor-auto" data-setting="networkPrivacy.tor.autoStart"><span class="toggle-slider"></span></div></div>
                 <div class="setting-item"><label for="setting-privacy-tor-bridges-enabled" data-i18n="ui.tor.useBridges">使用网桥</label><div class="toggle-switch"><input type="checkbox" id="setting-privacy-tor-bridges-enabled" data-setting="networkPrivacy.tor.useBridges"><span class="toggle-slider"></span></div></div>
                 <div class="setting-item"><label for="setting-privacy-tor-bridges" data-i18n="ui.tor.bridges">网桥配置（每行一条）</label><textarea rows="3" id="setting-privacy-tor-bridges" data-setting="networkPrivacy.tor.bridges" spellcheck="false" placeholder="obfs4 / snowflake / webtunnel / meek"></textarea></div>
-                <p class="setting-hint" data-i18n="ui.networkPrivacy.failClosed">启用后，Tor 未就绪或断开时会阻止范围内的请求，不会自动回退直连。修改网桥后请停止并重新连接。</p>
+                <p class="setting-hint" data-i18n="ui.networkPrivacy.failClosed">开启后，Tor 断开时会自动拦截请求，避免泄露真实 IP；改完网桥请重连。</p>
                 <div class="settings-actions tor-bridge-actions"><button class="btn-secondary" id="btn-privacy-tor-meek" data-i18n="ui.tor.useMeek">使用内置 meek 网桥</button></div>
                 <div class="settings-actions tor-connect-actions"><button class="btn-primary" id="btn-privacy-tor-start" data-i18n="ui.tor.start">连接 Tor</button><button class="btn-secondary" id="btn-privacy-tor-stop" data-i18n="ui.tor.stop">停止 Tor</button></div>
                 <div class="tor-connection-status"><progress id="privacy-tor-progress" max="100" value="0" aria-label="Tor connection progress"></progress><p id="privacy-tor-status" class="setting-hint" role="status" aria-live="polite"></p></div>
@@ -3138,6 +3189,37 @@
                     </button>
                   </div>
                 </div>
+              </div>
+              <div class="settings-group" id="entropy-pools-settings">
+                <h3><i class="fa-solid fa-layer-group"></i> <span data-i18n="ui.entropy.pools">自定义熵池</span></h3>
+                <p class="setting-hint" data-i18n="ui.entropy.hint">每次抽取都使用系统随机数。启用的额外输入会混入熵池，单项不可用时继续抽取。</p>
+                <div class="entropy-pool-toolbar">
+                  <label for="entropy-pool-select" data-i18n="ui.entropy.edit">编辑熵池</label>
+                  <select id="entropy-pool-select"></select>
+                  <button type="button" class="btn-secondary" data-pool-new data-i18n="ui.entropy.new">新建熵池</button>
+                </div>
+                <form data-pool-form hidden>
+                  <div class="setting-item">
+                    <label for="entropy-pool-name" data-i18n="ui.entropy.name">名称</label>
+                    <input id="entropy-pool-name" name="poolName" type="text" maxlength="60" required>
+                  </div>
+                  <div class="entropy-pool-inputs">
+                    <label class="entropy-pool-toggle"><span>drand Quicknet</span><span class="toggle-switch"><input name="drand" type="checkbox" role="switch"><span class="toggle-slider"></span></span></label>
+                    <label class="entropy-pool-toggle"><span data-i18n="ui.entropy.hardware">已配置的 TRNG 设备</span><span class="toggle-switch"><input name="hardware" type="checkbox" role="switch"><span class="toggle-slider"></span></span></label>
+                    <label class="entropy-pool-toggle"><span data-i18n="ui.entropy.active">用于抽牌与游戏</span><span class="toggle-switch"><input name="active" type="checkbox" role="switch"><span class="toggle-slider"></span></span></label>
+                  </div>
+                  <div class="setting-item">
+                    <label for="entropy-pool-device" data-i18n="ui.entropy.device">本地 RNG 端点（macOS/Linux，可留空）</label>
+                    <input id="entropy-pool-device" name="device" type="text" maxlength="165" placeholder="/dev/hwrng" spellcheck="false">
+                  </div>
+                  <div class="entropy-pool-toolbar">
+                    <button type="submit" class="btn-primary" data-i18n="ui.entropy.save">保存熵池</button>
+                    <button type="button" class="btn-secondary" data-pool-test data-i18n="ui.entropy.test">测试输入源</button>
+                    <button type="button" class="btn-secondary" data-pool-remove data-i18n="ui.entropy.remove">移除熵池</button>
+                  </div>
+                </form>
+                <p class="setting-hint" role="status"></p>
+                <ul class="entropy-pool-sources" aria-live="polite"></ul>
               </div>
               <div class="settings-group entropy-trng-settings" id="entropy-trng-settings" style="display:none">
                 <h3><i class="fa-solid fa-satellite-dish"></i> TRNG 设备配置</h3>
@@ -3969,6 +4051,7 @@
   <script src="../js/context-manager.js"></script>
   <script src="../js/fork-utils.js"></script>
   <script src="../../shared/agent-iterations.js"></script>
+  <script src="../../shared/interactive-content.js"></script>
   <script src="../js/goal-state.js"></script>
   <script src="../../data/bundled-skills.js"></script>
   <script src="../js/title-utils.js"></script>

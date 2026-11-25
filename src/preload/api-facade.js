@@ -117,6 +117,7 @@ function createApiFacade(ipcRenderer) {
     writeFile: (p, c, opts) => ipcRenderer.invoke('fs:writeFile', p, c, opts),
     createFile: (p, c, opts) => ipcRenderer.invoke('fs:createFile', p, c, opts),
     getFileEncodingInfo: (p) => ipcRenderer.invoke('fs:getFileInfo', p),
+    statPresentableFile: (p) => ipcRenderer.invoke('fs:presentableFile', p),
     convertFileEncoding: (p, opts) => ipcRenderer.invoke('fs:convertFileEncoding', p, opts),
     deleteFile: (p) => ipcRenderer.invoke('fs:deleteFile', p),
     moveFile: (s, d) => ipcRenderer.invoke('fs:moveFile', s, d),
@@ -136,7 +137,7 @@ function createApiFacade(ipcRenderer) {
       ipcRenderer.invoke('terminal:make', cwd, { sessionKey, sandboxMode }),
     terminalShellInfo: (location) => ipcRenderer.invoke('terminal:shellInfo', location),
     terminalPickShell: (location) => ipcRenderer.invoke('terminal:pickShell', location),
-    runTerminalCommand: (id, cmd) => ipcRenderer.invoke('terminal:run', id, cmd),
+    runTerminalCommand: (id, cmd, yieldMs) => ipcRenderer.invoke('terminal:run', id, cmd, yieldMs),
     awaitTerminalCommand: (id, cmd, timeoutMs) =>
       ipcRenderer.invoke('terminal:await', id, cmd, timeoutMs),
     killTerminal: (id) => ipcRenderer.invoke('terminal:kill', id),
@@ -241,6 +242,7 @@ function createApiFacade(ipcRenderer) {
     codeGetLastWorkspace: () => ipcRenderer.invoke('code:getLastWorkspace'),
     codeSetLastWorkspace: (wsPath) => ipcRenderer.invoke('code:setLastWorkspace', wsPath),
     codeListHistory: (ws) => ipcRenderer.invoke('code:listHistory', ws),
+    codeListHistoryRoots: () => ipcRenderer.invoke('code:listHistoryRoots'),
     codeLoadHistory: (ws, id) => ipcRenderer.invoke('code:loadHistory', ws, id),
     codeSaveHistory: (ws, id, data, options) =>
       ipcRenderer.invoke('code:saveHistory', ws, id, data, options),
@@ -499,7 +501,8 @@ function createApiFacade(ipcRenderer) {
     // Workspace
     workspaceCreate: (options) => ipcRenderer.invoke('workspace:create', options),
     workspaceInspect: (directory) => ipcRenderer.invoke('workspace:inspect', directory),
-    workspaceRename: (directory, name) => ipcRenderer.invoke('workspace:rename', directory, name),
+    workspaceRename: (directory, name, options) =>
+      ipcRenderer.invoke('workspace:rename', directory, name, options),
     workspaceRetain: (directory, hasChat) =>
       ipcRenderer.invoke('workspace:retain', directory, hasChat),
     workspaceResolve: (directory, options) =>

@@ -4,8 +4,10 @@
     const c = s.contextCompaction || {};
     const summaryEl = document.getElementById('setting-reasoning-summary');
     const preserveEl = document.getElementById('setting-reasoning-preserve');
+    const restrictScanEl = document.getElementById('setting-agent-restrict-disk-scan');
     if (summaryEl) summaryEl.checked = s.llm?.requestReasoningSummary !== false;
     if (preserveEl) preserveEl.checked = s.llm?.preserveEncryptedReasoning === true;
+    if (restrictScanEl) restrictScanEl.checked = s.agent?.restrictDiskScan !== false;
     const autoEl = document.getElementById('setting-context-auto');
     const thEl = document.getElementById('setting-context-threshold');
     const thVal = document.getElementById('setting-context-threshold-val');
@@ -48,6 +50,9 @@
       return;
     }
     await saveSettings({ agent: { iterationLimit: value } });
+  });
+  document.getElementById('setting-agent-restrict-disk-scan')?.addEventListener('change', async (e) => {
+    await saveSettings({ agent: { restrictDiskScan: !!e.target.checked } });
   });
   document.getElementById('setting-context-auto')?.addEventListener('change', async (e) => {
     await updateContextCompactionSettings({ enabled: !!e.target.checked }, '上下文自动压缩已' + (e.target.checked ? '开启' : '关闭'));

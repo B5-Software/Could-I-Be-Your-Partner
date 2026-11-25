@@ -21,7 +21,7 @@ function createClientFilePicker(request, publish) {
       const [id, raw, overwrite] = args, item = pending.get(id);
       if (!item) throw new Error('File picker is closed');
       if (channel === 'vmFileDialog:config') return item.config;
-      if (channel === 'vmFileDialog:browse') return request('filePicker:browse', raw);
+      if (channel === 'vmFileDialog:browse') return request('filePicker:browse', raw, item.config.hostDirectory);
       if (channel === 'vmFileDialog:mkdir') return request('filePicker:mkdir', raw);
       if (channel === 'vmFileDialog:cancel') { finish(id); return { ok: true }; }
       const result = await request('filePicker:validate', raw, item.config, overwrite);

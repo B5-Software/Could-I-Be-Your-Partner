@@ -53,6 +53,7 @@
       if (result?.ok === false) throw new Error(result.error);
       return result;
     },
+    chooseChatWorkspace: selectChatWorkspace,
     setEffort: async value => {
       const active = sessionManager?.getActive(currentMode)?.agent || agent;
       await active._ensureBackend();
@@ -78,8 +79,25 @@
   });
   window.CibypSuperAgent = new SuperAgentPanel({
     request: (action, input) => window.api.backendRequest('superagent:request', action, input),
-    settings: () => window.api.getSettings(), language: () => i18nGetLanguage(),
+    settings: () => window.api.getSettings(),
+    language: () => i18nGetLanguage(),
     subscribe: listener => window.api.onBackendEvent(listener),
+    markdown: text => renderMarkdown(text),
+    openWorkspace: async dir => {
+      const result = await window.api.workspaceOpenInExplorer(dir);
+      if (result?.ok === false) throw new Error(result.error);
+      return result;
+    },
+    pickWorkspace: async (title) => {
+      const result = await window.api.openFileDialog({ directory: true, title });
+      if (!result?.ok || !result.paths?.length) return null;
+      return result.paths[0];
+    },
+    pickHostWorkspace: async () => {
+      const result = await window.api.codeOpenWorkspace();
+      if (!result?.ok || !result.path) return null;
+      return result.path;
+    },
   });
   for (const event of ['session-created', 'session-closed', 'session-title']) {
     AppBus.on(event, () => { frontendShell.invalidateHistory(); frontendShell.refresh(); });

@@ -90,6 +90,13 @@ const FIELDS = [
     'Agent loop limit (0 = unlimited)',
     [0, Number.MAX_SAFE_INTEGER],
   ],
+  [
+    'agent.restrictDiskScan',
+    'context',
+    'setting-agent-restrict-disk-scan',
+    '禁止全盘扫描（先读目录再搜小目录）',
+    'boolean',
+  ],
   ['llm.maxRetries', 'llm', 'setting-llm-retries', 'Request retries', [0, 20]],
   [
     'contextCompaction.enabled',

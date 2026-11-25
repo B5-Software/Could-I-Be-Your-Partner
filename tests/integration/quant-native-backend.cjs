@@ -102,6 +102,18 @@ async function close() {
       price: '102',
       quantity: '1',
     };
+    const crossing = await call('native.paper.submit', {
+      ...immediate,
+      operationId: 'post-only-cross-fixture',
+      timeInForce: 'gtc',
+    });
+    assert.equal(crossing.ok, false);
+    assert.equal(crossing.error, 'POST_ONLY_WOULD_CROSS');
+    assert.equal(crossing.reconcileRequired, false);
+    const afterRejection = await call('native.paper.view', { id: project.id, kind: 'orders' });
+    assert.equal(afterRejection.pendingOrder, null);
+    assert.equal(afterRejection.historyPage.total, 0);
+    assert.equal(afterRejection.account.assets.USD.available, '1000');
     const filled = await call('native.paper.submit', immediate);
     assert.equal(filled.order.request.time_in_force, 'ioc');
     assert.equal(filled.order.status, 'cancelled');

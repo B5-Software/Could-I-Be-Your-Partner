@@ -25,6 +25,7 @@ window.initializeVMFilePicker = async (container, filePicker) => {
   byId('filename').value = config.filename;
   byId('filename').disabled = config.directory;
   byId('choose').textContent = config.save ? '保存' : config.directory ? '选择文件夹' : '打开';
+  byId('newFolder').hidden = config.hostDirectory === true;
   async function browse(directory) {
     const result = await filePicker.browse(directory);
     if (!result.ok) return error(result.error);

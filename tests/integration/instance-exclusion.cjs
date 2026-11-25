@@ -65,7 +65,16 @@ async function main() {
     const guiEntry = path.join(directory, 'gui.cjs');
     fs.writeFileSync(
       guiEntry,
-      `const {app,ipcMain}=require('electron');app.setPath('userData',${JSON.stringify(directory)});ipcMain.on('app:renderer-ready',()=>{console.log('GUI_READY');setTimeout(()=>app.quit(),200)});require(${JSON.stringify(path.join(root, 'src/main/main'))});`,
+      `const {app,ipcMain}=require('electron');
+      app.setPath('userData',${JSON.stringify(directory)});
+      app.on('browser-window-created',(_,window)=>{
+        window.webContents.on('did-finish-load',()=>{
+          const url=new URL(window.webContents.getURL());
+          if(url.pathname.endsWith('/splash.html')) console.log('SPLASH_VERSION='+url.searchParams.get('version'));
+        });
+      });
+      ipcMain.on('app:renderer-ready',()=>{console.log('GUI_READY');setTimeout(()=>app.quit(),200)});
+      require(${JSON.stringify(path.join(root, 'src/main/main'))});`,
     );
     const gui = spawn(require('electron'), [guiEntry], {
       env: { ...env, CIBYP_NO_GUI: '' },
@@ -87,6 +96,9 @@ async function main() {
       gui.once('error', reject);
     });
     assert.match(output, /GUI_READY/);
+    assert.ok(
+      output.split(/\r?\n/).includes('SPLASH_VERSION=' + require('../../package.json').version),
+    );
     assert.equal(
       (await client.request('snapshot')).pid,
       pids[0],

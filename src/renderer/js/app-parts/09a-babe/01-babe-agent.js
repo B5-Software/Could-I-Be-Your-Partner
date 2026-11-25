@@ -8,6 +8,52 @@
   let babeProactiveActive = false;
   let babeProactiveProduced = false;
 
+  function clearBabeStreamBubble() {
+    if (babeStreamBubble?.renderTimer) clearTimeout(babeStreamBubble.renderTimer);
+    babeStreamBubble = null;
+  }
+
+  function restoreBabeStreamBubble(stream) {
+    if (!stream || (!stream.requestId && !stream.content && !stream.reasoning)) return null;
+    clearBabeStreamBubble();
+    const bubble = createBabeStreamBubble();
+    if (!bubble) return null;
+    if (stream.requestId && bubble.el) {
+      bubble.el.setAttribute('data-stream-request', String(stream.requestId));
+    }
+    setReasoningLabel(bubble.reasoningSection, stream);
+    bubble.rawContent = String(stream.content || '').replace(/【好感度[+-]?\d+】/g, '');
+    bubble.rawReasoning = stream.reasoning || '';
+    bubble.contentStarted = Boolean(bubble.rawContent);
+    if (bubble.rawReasoning) {
+      bubble.reasoningSection.style.display = 'block';
+      if (stream.finalized) {
+        bubble.reasoningSection.classList.add('collapsed');
+        bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning);
+      } else {
+        bubble.reasoningSection.classList.remove('collapsed');
+        const rCursor = bubble.contentStarted ? '' : '<span class="streaming-cursor"></span>';
+        bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning) + rCursor;
+      }
+    }
+    if (bubble.rawContent) {
+      bubble.contentEl.innerHTML =
+        renderMarkdown(bubble.rawContent) + (stream.finalized ? '' : '<span class="streaming-cursor"></span>');
+    } else if (stream.finalized && bubble.rawReasoning) {
+      bubble.contentEl.style.display = 'none';
+      const timeEl = bubble.el.querySelector('.babe-msg-time');
+      if (timeEl) timeEl.style.display = 'none';
+    }
+    if (stream.finalized) {
+      window.CibypMessages?.bind(bubble.el, { mode: 'babe', role: 'assistant', content: bubble.rawContent });
+      bubble.el.classList.remove('streaming');
+      babeStreamBubble = null;
+    } else {
+      babeStreamBubble = bubble;
+    }
+    return bubble;
+  }
+
   // 初始化 Babe Agent
   function wireBabeAgent(ag) {
     if (!ag) return;
@@ -46,13 +92,17 @@
           addBabeMessage('system', data);
           break;
         case 'stream-chunk': {
+          if (!babeStreamBubble || !babeStreamBubble.el?.isConnected) {
+            babeStreamBubble = createBabeStreamBubble();
+            if (babeStreamBubble?.el && data?.requestId) {
+              babeStreamBubble.el.setAttribute('data-stream-request', String(data.requestId));
+            }
+          }
           const bubble = babeStreamBubble;
           if (!bubble) return;
           if (data.content) {
             const cleanContent = data.content.replace(/【好感度[+-]?\d+】/g, '');
-            const dedup = dedupAppendChunk(bubble.rawContent, bubble._lastChunk, cleanContent);
-            bubble.rawContent = dedup.raw;
-            bubble._lastChunk = dedup.lastChunk;
+            bubble.rawContent += cleanContent;
             bubble.contentStarted = true;
             bubble.contentEl.innerHTML = renderMarkdown(bubble.rawContent) + '<span class="streaming-cursor"></span>';
             if (bubble.rawReasoning) bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning);
@@ -62,34 +112,43 @@
             bubble.rawReasoning += data.reasoning;
             bubble.reasoningSection.style.display = 'block';
             const rCursor = bubble.contentStarted ? '' : '<span class="streaming-cursor"></span>';
-            bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning) + rCursor;
-            try { bubble.reasoningEl.scrollTop = bubble.reasoningEl.scrollHeight; } catch (_) {}
+            renderStreamingReasoning(bubble.reasoningEl, renderMarkdown(bubble.rawReasoning) + rCursor);
           }
           scrollChatToBottom(msgsEl);
           if (!bubble.renderTimer) {
             bubble.renderTimer = setTimeout(() => {
               bubble.renderTimer = null;
-              if (bubble.el.id) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
+              if (bubble.el?.isConnected && bubble.el.id) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
             }, 120);
           }
           break;
         }
         case 'stream-end': {
           const isAuthoritativeFinal = !!(data && typeof data === 'object' && data.content !== undefined);
-          const bubble = babeStreamBubble;
-          if (!bubble) {
-            if (isAuthoritativeFinal && data.requestId) {
+          if (!isAuthoritativeFinal) return;
+          let bubble = babeStreamBubble;
+          if (!bubble || !bubble.el?.isConnected) {
+            if (data.requestId) {
               const target = msgsEl.querySelector(`[data-stream-request="${cssEscape(data.requestId)}"]`);
               if (target) {
-                const body = target.querySelector('.babe-msg-content, .babe-msg-body, .message-content');
+                const body = target.querySelector('.babe-msg-bubble, .babe-msg-content, .babe-msg-body, .message-content');
                 const clean = String(data.content || '').replace(/【好感度[+-]?\d+】/g, '').trimEnd();
                 if (body && clean) body.innerHTML = renderMarkdown(clean);
+                target.classList.remove('streaming');
+                babeStreamBubble = null;
+                return;
               }
             }
+            const cleanFinal = String(data.content || '').replace(/【好感度[+-]?\d+】/g, '').trimEnd();
+            if (cleanFinal || data.reasoning) {
+              bubble = createBabeStreamBubble();
+              if (bubble?.el && data.requestId) bubble.el.setAttribute('data-stream-request', String(data.requestId));
+            }
+          }
+          if (!bubble) {
             babeStreamBubble = null;
             return;
           }
-          if (!isAuthoritativeFinal) return;
           if (bubble.renderTimer) { clearTimeout(bubble.renderTimer); bubble.renderTimer = null; }
           setReasoningLabel(bubble.reasoningSection, data);
           const hasReasoning = !!(data.reasoning || bubble.rawReasoning);
@@ -101,7 +160,6 @@
             bubble.reasoningSection.classList.add('collapsed');
             bubble.reasoningSection.style.display = 'block';
             bubble.reasoningEl.innerHTML = renderMarkdown(data.reasoning || bubble.rawReasoning);
-            try { bubble.reasoningEl.scrollTop = bubble.reasoningEl.scrollHeight; } catch (_) {}
           }
           if (hasContent) {
             bubble.contentEl.innerHTML = renderMarkdown(finalContent);
@@ -116,12 +174,13 @@
             break;
           }
           window.CibypMessages?.bind(bubble.el, {mode:'babe', role:'assistant', content:finalContent});
-      bubble.el.classList.remove('streaming');
+          bubble.el.classList.remove('streaming');
           if (bubble.el.id) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
           babeStreamBubble = null;
           break;
         }
         case 'stream-start':
+          clearBabeStreamBubble();
           babeStreamBubble = createBabeStreamBubble();
           if (babeStreamBubble?.el && data?.requestId) {
             babeStreamBubble.el.setAttribute('data-stream-request', String(data.requestId));
@@ -145,7 +204,7 @@
           updateBabeAffection(data.value);
           break;
         case 'error':
-          addBabeMessage('system', '错误: ' + (typeof data === 'string' ? data : (data?.error || JSON.stringify(data))));
+          showToast(data?.error || data?.message || String(data), 'error');
           break;
       }
     };

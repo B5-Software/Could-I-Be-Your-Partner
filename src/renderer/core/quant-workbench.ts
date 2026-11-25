@@ -78,7 +78,22 @@ export class QuantWorkbench {
   private offset = 0;
   private selectedRun?: QuantRun;
   private chat?: QuantChatView;
-  private stream = '';
+  private streamState: {
+    requestId: string | null;
+    content: string;
+    reasoning: string;
+    reasoningKind: string;
+    active: boolean;
+    finalized: boolean;
+  } = {
+    requestId: null,
+    content: '',
+    reasoning: '',
+    reasoningKind: '',
+    active: false,
+    finalized: false,
+  };
+  private streamRenderTimer?: ReturnType<typeof setTimeout>;
   private chatLimit = 100;
   private active = false;
   private refreshBusy = false;
@@ -170,7 +185,6 @@ export class QuantWorkbench {
     window.addEventListener('cibyp:page-changed', (event) => {
       const page = (event as CustomEvent<{ page: string }>).detail.page;
       this.active = page === 'quant';
-      document.body.classList.toggle('quant-open', this.active);
       if (this.active) void this.open().catch((error) => this.error(error));
       else {
         this.exitChart();
@@ -293,7 +307,7 @@ export class QuantWorkbench {
     this.currentId = id;
     this.selectedRun = undefined;
     this.chat = undefined;
-    this.stream = '';
+    this.resetStream();
     this.chatLimit = 100;
     this.offset = 0;
     try {
@@ -729,13 +743,107 @@ export class QuantWorkbench {
       );
     });
   }
+  private resetStream(): void {
+    clearTimeout(this.streamRenderTimer);
+    this.streamRenderTimer = undefined;
+    this.streamState = {
+      requestId: null,
+      content: '',
+      reasoning: '',
+      reasoningKind: '',
+      active: false,
+      finalized: false,
+    };
+  }
+  private mergeStreamText(prev: string, chunk: string): string {
+    if (!chunk) return prev;
+    if (prev && chunk.startsWith(prev)) return chunk;
+    return prev + chunk;
+  }
+  private scheduleStreamRender(): void {
+    if (this.streamRenderTimer) return;
+    this.streamRenderTimer = setTimeout(() => {
+      this.streamRenderTimer = undefined;
+      this.renderStreamBubble();
+    }, 64);
+  }
+  private renderStreamBubble(): void {
+    const host = this.el('[data-chat-messages]');
+    const atBottom = host.scrollTop + host.clientHeight >= host.scrollHeight - 80;
+    const existing = host.querySelector<HTMLElement>('.quant-stream');
+    const hasPayload = Boolean(this.streamState.content || this.streamState.reasoning);
+    if (!this.streamState.active || (!hasPayload && this.streamState.finalized)) {
+      existing?.remove();
+      return;
+    }
+    host.querySelector('.quant-chat-empty')?.remove();
+    let draft = existing;
+    if (!draft) {
+      draft = document.createElement('article');
+      draft.className = 'quant-chat-message assistant quant-stream';
+      draft.innerHTML = `<span class="quant-chat-author">${escape(this.text('assistant'))}</span><details class="quant-reasoning" hidden><summary>${escape(this.text('thinking'))}</summary><div data-stream-reasoning></div></details><div class="quant-stream-body" data-stream-body></div>`;
+      host.append(draft);
+    }
+    const reasoningWrap = draft.querySelector<HTMLDetailsElement>('.quant-reasoning');
+    const reasoningBody = draft.querySelector<HTMLElement>('[data-stream-reasoning]');
+    if (reasoningWrap && reasoningBody) {
+      if (this.streamState.reasoning) {
+        reasoningWrap.hidden = false;
+        if (!this.streamState.content && !this.streamState.finalized) reasoningWrap.open = true;
+        reasoningBody.textContent = this.streamState.reasoning;
+      } else {
+        reasoningWrap.hidden = true;
+      }
+    }
+    const bodyEl = draft.querySelector<HTMLElement>('[data-stream-body]');
+    if (bodyEl) {
+      const rendered = this.streamState.content ? this.safeMarkdown(this.streamState.content) : '';
+      const cursor = this.streamState.finalized ? '' : '<span class="streaming-cursor"></span>';
+      bodyEl.innerHTML = rendered + cursor;
+    }
+    const working = this.el('[data-chat-working]');
+    if (hasPayload) working.hidden = true;
+    if (atBottom) host.scrollTop = host.scrollHeight;
+  }
   private async loadChat(): Promise<void> {
     const id = this.currentId;
     const generation = ++this.chatGeneration;
     const view = await this.call<QuantChatView>('chat.open', { id });
     if (this.currentId !== id || this.chatGeneration !== generation) return;
     this.chat = view;
-    this.stream = '';
+    const activeStream = view.activeStream;
+    if (
+      view.session.busy &&
+      activeStream &&
+      !activeStream.finalized &&
+      (activeStream.content || activeStream.reasoning)
+    ) {
+      const sameLive =
+        this.streamState.active &&
+        (!activeStream.requestId ||
+          !this.streamState.requestId ||
+          activeStream.requestId === this.streamState.requestId);
+      const liveContent = sameLive ? this.streamState.content : '';
+      const liveReasoning = sameLive ? this.streamState.reasoning : '';
+      this.streamState = {
+        requestId: activeStream.requestId || this.streamState.requestId || null,
+        content:
+          liveContent.length > (activeStream.content || '').length
+            ? liveContent
+            : activeStream.content || '',
+        reasoning:
+          liveReasoning.length > (activeStream.reasoning || '').length
+            ? liveReasoning
+            : activeStream.reasoning || '',
+        reasoningKind: activeStream.reasoningKind || this.streamState.reasoningKind || '',
+        active: true,
+        finalized: false,
+      };
+    } else if (!view.session.busy) {
+      this.resetStream();
+    } else if (!this.streamState.active) {
+      this.resetStream();
+    }
     this.renderChat();
     try {
       const models = (await this.options.backend('getSessionModels', view.session.key)) as {
@@ -778,30 +886,49 @@ export class QuantWorkbench {
               .map((p) => p.text)
               .join('\n')
           : '';
-    host.innerHTML = messages.length
-      ? (messages.length > this.chatLimit ? this.button('history', 'older', 'history') : '') +
-        messages
-          .slice(-this.chatLimit)
-          .filter(
-            (m) =>
-              ['user', 'assistant', 'tool'].includes(m.role) &&
-              (m.role !== 'assistant' || content(m.content).trim()),
-          )
-          .map((message) => {
-            if (message.role === 'tool')
-              return `<details class="quant-tool-record"><summary>${icon('settings')}${escape(message.name || 'Tool')}</summary><pre>${escape(content(message.content).slice(0, 12000))}</pre></details>`;
-            return `<article class="quant-chat-message ${message.role}"><span class="quant-chat-author">${escape(this.text(message.role === 'user' ? 'you' : 'assistant'))}</span><div>${this.safeMarkdown(content(message.content))}</div></article>`;
-          })
-          .join('')
-      : `<div class="quant-chat-empty">${icon('chat')}<h3>${escape(this.text('chatEmpty'))}</h3><p>${escape(this.text('chatHint'))}</p>${this.button('promptCompare', 'prompt-compare', 'chart')}${this.workspace?.network ? this.button('promptBase', 'prompt-base', 'settings') : this.button('promptMarket', 'prompt-market', 'settings')}</div>`;
-    if (this.stream) {
-      const draft = document.createElement('article');
-      draft.className = 'quant-chat-message assistant quant-stream';
-      draft.textContent = this.stream;
-      host.append(draft);
+    const hasStream =
+      this.streamState.active &&
+      Boolean(
+        this.streamState.content || this.streamState.reasoning || !this.streamState.finalized,
+      );
+    const hasUnadmitted = Boolean(this.chat?.unadmittedInput?.text);
+    const visibleMessages = messages
+      .slice(-this.chatLimit)
+      .filter(
+        (m) =>
+          ['user', 'assistant', 'tool'].includes(m.role) &&
+          (m.role !== 'assistant' ||
+            content(m.content).trim() ||
+            m.reasoning ||
+            m.reasoningSummary),
+      );
+    host.innerHTML =
+      visibleMessages.length || hasStream || hasUnadmitted
+        ? (messages.length > this.chatLimit ? this.button('history', 'older', 'history') : '') +
+          visibleMessages
+            .map((message) => {
+              if (message.role === 'tool')
+                return `<details class="quant-tool-record"><summary>${icon('settings')}${escape(message.name || 'Tool')}</summary><pre>${escape(content(message.content).slice(0, 12000))}</pre></details>`;
+              const reasoning =
+                message.role === 'assistant' && (message.reasoning || message.reasoningSummary)
+                  ? `<details class="quant-reasoning"><summary>${escape(this.text('thinking'))}</summary><div>${escape(message.reasoning || message.reasoningSummary || '')}</div></details>`
+                  : '';
+              return `<article class="quant-chat-message ${message.role}"><span class="quant-chat-author">${escape(this.text(message.role === 'user' ? 'you' : 'assistant'))}</span>${reasoning}<div>${this.safeMarkdown(content(message.content))}</div></article>`;
+            })
+            .join('') +
+          (hasUnadmitted
+            ? `<article class="quant-chat-message user"><span class="quant-chat-author">${escape(this.text('you'))}</span><div>${this.safeMarkdown(this.chat!.unadmittedInput!.text)}</div></article>`
+            : '')
+        : `<div class="quant-chat-empty">${icon('chat')}<h3>${escape(this.text('chatEmpty'))}</h3><p>${escape(this.text('chatHint'))}</p>${this.button('promptCompare', 'prompt-compare', 'chart')}${this.workspace?.network ? this.button('promptBase', 'prompt-base', 'settings') : this.button('promptMarket', 'prompt-market', 'settings')}</div>`;
+    if (hasStream) {
+      this.renderStreamBubble();
     }
     if (atBottom) host.scrollTop = host.scrollHeight;
-    const busy = Boolean(this.chatBusy || this.chat?.session.busy);
+    const busy = Boolean(
+      this.chatBusy ||
+      this.chat?.session.busy ||
+      (this.streamState.active && !this.streamState.finalized),
+    );
     const question =
       this.chat?.session.key === 'quant:' + this.currentId &&
       this.chat.pendingInteraction?.scope === 'quant-questionnaire'
@@ -809,7 +936,10 @@ export class QuantWorkbench {
         : undefined;
     this.el('[data-send]').hidden = busy || Boolean(question);
     this.el('[data-stop]').hidden = !busy;
-    this.el('[data-chat-working]').hidden = !busy || Boolean(question);
+    const hasStreamingTokens = Boolean(
+      this.streamState.active && (this.streamState.content || this.streamState.reasoning),
+    );
+    this.el('[data-chat-working]').hidden = !busy || Boolean(question) || hasStreamingTokens;
     this.el('[data-chat-working]').textContent = this.text('thinking');
     this.renderQuestion(question);
   }
@@ -1049,16 +1179,119 @@ export class QuantWorkbench {
       this.eventTimer = setTimeout(() => void this.pull().catch((error) => this.error(error)), 180);
     }
     if (event.key !== 'quant:' + this.currentId) return;
-    if (event.type === 'agent-message' && event.messageType === 'stream-chunk') {
-      const data = event.data as { content?: string };
-      if (typeof data?.content === 'string') this.stream += data.content;
+    const type = String(event.type || '');
+    // Ignore duplicate top-level stream events; agent-message carries the same stream updates.
+    if (type === 'stream-start' || type === 'stream-chunk' || type === 'stream-end') return;
+    if (type === 'usage' || type === 'working' || type === 'title') return;
+    if (type === 'agent-message') {
+      const messageType = String(event.messageType || '');
+      const data = (event.data || {}) as {
+        requestId?: string;
+        content?: string;
+        reasoning?: string;
+        reasoningKind?: string;
+      };
+      if (messageType === 'stream-start') {
+        clearTimeout(this.streamRenderTimer);
+        this.streamRenderTimer = undefined;
+        this.streamState = {
+          requestId: data.requestId || null,
+          content: '',
+          reasoning: '',
+          reasoningKind: '',
+          active: true,
+          finalized: false,
+        };
+        if (this.chat) this.chat.session.busy = true;
+        this.el('[data-send]').hidden = true;
+        this.el('[data-stop]').hidden = false;
+        this.renderStreamBubble();
+        return;
+      }
+      if (messageType === 'stream-chunk') {
+        if (
+          !this.streamState.active ||
+          (data.requestId &&
+            this.streamState.requestId &&
+            data.requestId !== this.streamState.requestId)
+        ) {
+          this.streamState = {
+            requestId: data.requestId || null,
+            content: '',
+            reasoning: '',
+            reasoningKind: '',
+            active: true,
+            finalized: false,
+          };
+        } else if (data.requestId && !this.streamState.requestId) {
+          this.streamState.requestId = data.requestId;
+        }
+        if (typeof data.content === 'string' && data.content) {
+          this.streamState.content = this.mergeStreamText(this.streamState.content, data.content);
+        }
+        if (typeof data.reasoning === 'string' && data.reasoning) {
+          this.streamState.reasoning = this.mergeStreamText(
+            this.streamState.reasoning,
+            data.reasoning,
+          );
+          if (data.reasoningKind) this.streamState.reasoningKind = data.reasoningKind;
+        }
+        if (this.chat) this.chat.session.busy = true;
+        this.el('[data-send]').hidden = true;
+        this.el('[data-stop]').hidden = false;
+        this.scheduleStreamRender();
+        return;
+      }
+      if (messageType === 'stream-end') {
+        clearTimeout(this.streamRenderTimer);
+        this.streamRenderTimer = undefined;
+        if (
+          typeof data.content === 'string' &&
+          data.content.length >= this.streamState.content.length
+        ) {
+          this.streamState.content = data.content;
+        }
+        if (
+          typeof data.reasoning === 'string' &&
+          data.reasoning.length >= this.streamState.reasoning.length
+        ) {
+          this.streamState.reasoning = data.reasoning;
+        }
+        if (this.streamState.active || this.streamState.content || this.streamState.reasoning) {
+          this.streamState.active = true;
+          this.streamState.finalized = true;
+          this.renderStreamBubble();
+        }
+        return;
+      }
+    }
+    if (type === 'status') {
+      const busy = Boolean(event.busy);
+      if (this.chat) this.chat.session.busy = busy;
+      if (busy) {
+        const question =
+          this.chat?.session.key === 'quant:' + this.currentId &&
+          this.chat.pendingInteraction?.scope === 'quant-questionnaire';
+        this.el('[data-send]').hidden = true;
+        this.el('[data-stop]').hidden = false;
+        const hasStreamingTokens = Boolean(
+          this.streamState.active && (this.streamState.content || this.streamState.reasoning),
+        );
+        this.el('[data-chat-working]').hidden = Boolean(question) || hasStreamingTokens;
+        return;
+      }
+      if (this.streamState.active) this.streamState.finalized = true;
+    }
+    if (type === 'message-stored') {
+      const stored = event.message as { role?: string } | undefined;
+      if (stored?.role === 'assistant') {
+        this.resetStream();
+      }
     }
     clearTimeout(this.chatTimer);
     this.chatTimer = setTimeout(() => {
-      if (this.stream && event.type === 'agent-message' && event.messageType === 'stream-chunk')
-        this.renderChat();
-      else void this.loadChat().catch((error) => this.error(error));
-    }, 120);
+      void this.loadChat().catch((error) => this.error(error));
+    }, 90);
   }
   private async action(button: HTMLElement): Promise<void> {
     const action = button.dataset.action || '';

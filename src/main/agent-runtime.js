@@ -56,6 +56,7 @@ function createAgentRuntime({
   interactionPolicy = INTERACTION_POLICY.PROMPT,
   log = console,
   decorateAgent,
+  artifactFile,
 } = {}) {
   if (!ipcMain && !suppliedApi)
     throw new TypeError('createAgentRuntime: api or ipcMain is required');
@@ -72,6 +73,9 @@ function createAgentRuntime({
   const core = loadAgentCore();
 
   const sessions = new Map();
+  const artifacts = artifactFile
+    ? new (require('./services/artifact-library').ArtifactLibrary)(artifactFile)
+    : null;
   let externalToolService;
   const listeners = new Set();
   // Todos belong to the App, including TUI/WebUI. A single store preserves
@@ -79,6 +83,13 @@ function createAgentRuntime({
   const todos = createTodoStore(api, () => emit({ type: 'todo', items: todos.todoItems }));
 
   function emit(event) {
+    if (event && event.key) {
+      const session = sessions.get(event.key);
+      if (session) {
+        session.eventSeq = (session.eventSeq || 0) + 1;
+        event = { ...event, seq: session.eventSeq };
+      }
+    }
     eventBus.publish('agent:session-event', event);
     for (const listener of [...listeners]) {
       try {
@@ -137,13 +148,26 @@ function createAgentRuntime({
     };
   }
 
-  function finishAgentRun(session) {
+  async function finishAgentRun(session) {
     if (session.agent.running) {
       session.agent.running = false;
       session.agent._emitWorkingStatus('idle');
     }
-    session.busy = false;
+    session.activeStream = null;
+    session.startedAt = null;
     session.status = session.lastError ? 'error' : session.stopRequested ? 'interrupted' : 'idle';
+    session.agent.sessionStatus = session.status;
+    session.agent.sessionLastError = session.lastError;
+    if (
+      session.agent.contextManager.getHistoryMessages().some((message) => message.role === 'user')
+    ) {
+      try {
+        await session.agent.saveToHistory({ strict: true });
+      } catch (error) {
+        log.warn?.('[agent-runtime] Final session snapshot failed: ' + error.message);
+      }
+    }
+    session.busy = false;
     session.finish?.();
     emit({ type: 'status', key: session.key, status: session.status });
     try {
@@ -338,8 +362,84 @@ function createAgentRuntime({
     return true;
   }
 
+  function updateSessionStreamState(session, type, data) {
+    if (type === 'message-stored') {
+      if (data?.role === 'user') session.unadmittedInput = null;
+      if (data?.role === 'assistant') session.activeStream = null;
+      return;
+    }
+    if (type === 'stream-start') {
+      session.activeStream = {
+        requestId: String(data?.requestId || ''),
+        content: '',
+        reasoning: '',
+        reasoningKind: data?.reasoningKind || '',
+        finalized: false,
+        startedAt: Date.now(),
+      };
+      return;
+    }
+    if (type === 'stream-chunk') {
+      const reqId = String(data?.requestId || '');
+      if (
+        !session.activeStream ||
+        (reqId && session.activeStream.requestId && session.activeStream.requestId !== reqId)
+      ) {
+        session.activeStream = {
+          requestId: reqId,
+          content: '',
+          reasoning: '',
+          reasoningKind: data?.reasoningKind || '',
+          finalized: false,
+          startedAt: Date.now(),
+        };
+      }
+      const chunkContent = typeof data === 'string' ? data : data?.content || '';
+      const chunkReasoning =
+        typeof data === 'object' && data
+          ? require('../shared/reasoning').presentation(data).reasoning
+          : '';
+      if (chunkContent) session.activeStream.content += chunkContent;
+      if (chunkReasoning) session.activeStream.reasoning += chunkReasoning;
+      if (data?.reasoningKind) session.activeStream.reasoningKind = data.reasoningKind;
+      return;
+    }
+    if (type === 'stream-end') {
+      const isAuthoritativeFinal =
+        typeof data === 'string' ||
+        !(data && typeof data === 'object') ||
+        data.content !== undefined;
+      if (!isAuthoritativeFinal) return;
+      if (data?.aborted || data?.fallback) {
+        session.activeStream = null;
+        return;
+      }
+      const fullContent =
+        typeof data === 'object' ? data?.content || '' : typeof data === 'string' ? data : '';
+      const fullReasoning =
+        typeof data === 'object' && data
+          ? require('../shared/reasoning').presentation(data).reasoning
+          : '';
+      const content = fullContent || session.activeStream?.content || '';
+      const reasoning = fullReasoning || session.activeStream?.reasoning || '';
+      if (!content.trim() && !reasoning.trim()) {
+        session.activeStream = null;
+        return;
+      }
+      session.activeStream = {
+        requestId: String(data?.requestId || session.activeStream?.requestId || ''),
+        content,
+        reasoning,
+        reasoningKind: data?.reasoningKind || session.activeStream?.reasoningKind || '',
+        finalized: true,
+        startedAt: session.activeStream?.startedAt || Date.now(),
+      };
+    }
+  }
+
   /** Agent 消息事件 → 会话事件流 */
   function handleAgentMessage(session, type, data) {
+    updateSessionStreamState(session, type, data);
     emit({ type: 'agent-message', key: session.key, messageType: type, data });
     switch (type) {
       case 'approval': {
@@ -369,6 +469,7 @@ function createAgentRuntime({
           key: session.key,
           role: type === 'error' ? 'system' : type,
           content: data,
+          ...(type === 'error' && { transient: true }),
         });
         return;
       case 'stream-start':
@@ -430,6 +531,9 @@ function createAgentRuntime({
       busy: false,
       title: '',
       createdAt: Date.now(),
+      startedAt: null,
+      eventSeq: 0,
+      activeStream: null,
       pendingInteraction: null,
       profile: [
         'settings-assistant',
@@ -465,8 +569,9 @@ function createAgentRuntime({
     session.agent.onStatusChange = (status) => {
       // The Agent core calls active work "working"; frontends use "running".
       // Normalize here so the first tarot draw cannot clear the TUI spinner.
-      if (session.busy && status === 'idle') return;
+      if (status === 'idle') return;
       session.status = status === 'working' ? 'running' : status;
+      session.agent.sessionStatus = session.status;
       emit({ type: 'status', key: sessionKey, status: session.status });
     };
     session.agent.onTitleChange = (title) => {
@@ -507,6 +612,16 @@ function createAgentRuntime({
       emit({ type: 'notification', key: session.key, notificationType, payload }),
     );
     agent.sessionKey = session.key;
+    if (artifacts)
+      agent.recordPresentedArtifact = (data) =>
+        artifacts.record(
+          {
+            mode: session.mode,
+            conversationId: agent.conversationId,
+            title: agent.conversationTitle || session.title,
+          },
+          data,
+        );
     agent.mode = session.mode;
     agent.minimalMode = minimalMode;
     if (helper) {
@@ -978,14 +1093,37 @@ function createAgentRuntime({
       const session = sessions.get(key);
       if (!session) return null;
       const a = session.agent;
+      const historyMessages = a.contextManager?.getHistoryMessages() || [];
+      const hasUnadmitted =
+        session.unadmittedInput &&
+        !historyMessages
+          .slice(session.unadmittedInput.start)
+          .some((m) => m.role === 'user' && m.metadata?.kind !== 'context-update');
       return {
+        viewSeq: session.eventSeq || 0,
+        startedAt: session.startedAt || null,
+        activeStream: session.activeStream
+          ? {
+              requestId: session.activeStream.requestId,
+              content: session.activeStream.content,
+              reasoning: session.activeStream.reasoning,
+              reasoningKind: session.activeStream.reasoningKind || '',
+              finalized: session.activeStream.finalized === true,
+            }
+          : null,
+        unadmittedInput: hasUnadmitted
+          ? {
+              text: session.unadmittedInput.text,
+              attachments: session.unadmittedInput.attachments || [],
+            }
+          : null,
         session: sessionSnapshot(session),
         runtimeOverride: session.runtimeOverride || null,
         stats: getStats(key),
-        messages: a.contextManager?.getHistoryMessages() || [],
+        messages: historyMessages,
         workingMessages: a.contextManager?.messages || [],
         displayMessages: flattenMessages({
-          messages: a.contextManager?.getHistoryMessages() || [],
+          messages: historyMessages,
         }),
         llmOverride: a.llmOverride,
         modelRevision: session.modelRevision || 0,
@@ -1286,7 +1424,8 @@ function createAgentRuntime({
     async configureSession(key, values = {}) {
       const session = sessions.get(key);
       if (!session) throw new Error('Unknown session');
-      if (session.busy) throw new Error('Stop the task before changing session configuration');
+      if (session.busy || session.workspaceChanging)
+        throw new Error('Stop the task before changing session configuration');
       await ensureInitialized(session);
       const a = session.agent;
       if (values.pluginSeed) {
@@ -1360,7 +1499,7 @@ function createAgentRuntime({
         'compactNow',
       ]);
       if (action === 'executeTool' || action === 'compactNow') {
-        if (session.busy) throw new Error('The session is busy');
+        if (session.busy || session.workspaceChanging) throw new Error('The session is busy');
         session.busy = true;
         session.compacting = action === 'compactNow';
         session.finished = new Promise((resolve) => {
@@ -1379,10 +1518,15 @@ function createAgentRuntime({
       }
       if (!allowed.has(action) || typeof a[action] !== 'function')
         throw new Error('Unknown Agent action');
-      if (session.busy && ['loadFromHistory', 'proactiveSend'].includes(action))
+      if (
+        (session.busy || session.workspaceChanging) &&
+        ['loadFromHistory', 'proactiveSend'].includes(action)
+      )
         throw new Error('The session is busy');
       if (action === 'proactiveSend') {
         session.busy = true;
+        session.startedAt = Date.now();
+        session.activeStream = null;
         session.status = 'running';
         session.stopRequested = false;
         session.lastError = null;
@@ -1397,12 +1541,18 @@ function createAgentRuntime({
           session.lastError = error.message;
           throw error;
         } finally {
-          finishAgentRun(session);
+          await finishAgentRun(session);
         }
         emit({ type: 'view-changed', key });
         return { result, view: this.getView(key) };
       }
       const result = await a[action](...args);
+      if (action === 'loadFromHistory') {
+        session.status = a.sessionStatus;
+        session.lastError = a.sessionLastError;
+        if (session.mode === 'chat') session.hostWorkspacePath = a.hostWorkspacePath;
+        emit({ type: 'status', key, status: session.status });
+      }
       emit({ type: 'view-changed', key });
       return { result, view: this.getView(key) };
     },
@@ -1470,6 +1620,7 @@ function createAgentRuntime({
     },
     async sendMessage(key, message, attachments = [], options = {}) {
       const session = createSession({ key, mode: 'chat' });
+      if (session.workspaceChanging) return { ok: false, error: 'The workspace is being changed' };
       if (pendingView(session)?.scope === 'quant-questionnaire')
         return { ok: false, error: 'QUANT_QUESTIONNAIRE_PENDING' };
       if (session.rewinding) return { ok: false, error: 'Conversation is being rewound' };
@@ -1502,9 +1653,13 @@ function createAgentRuntime({
       )
         return { ok: false, error: 'Maximum concurrent sessions reached' };
       session.busy = true;
+      session.startedAt = Date.now();
+      session.activeStream = null;
       session.lastError = null;
+      const normalizedAttachments = require('../shared/attachments').normalize(attachments);
       session.unadmittedInput = {
         text: message,
+        attachments: normalizedAttachments,
         start: session.agent.contextManager.getHistoryMessages().length,
       };
       session.finished = new Promise((resolve) => {
@@ -1512,21 +1667,27 @@ function createAgentRuntime({
       });
       session.stopRequested = false;
       session.status = 'running';
+      session.agent.sessionStatus = 'running';
+      session.agent.sessionLastError = null;
       emit({
         type: 'message',
         key: session.key,
         role: 'user',
         content: message,
-        attachments: require('../shared/attachments').normalize(attachments),
+        attachments: normalizedAttachments,
       });
       emit({ type: 'status', key: session.key, status: 'running' });
       const execute = async () => {
         try {
           await ensureInitialized(session);
           if (session.stopRequested) return { ok: true, stopped: true };
+          const workspaceBefore = session.agent.workspacePath;
           await session.agent.sendMessage(message, attachments || [], options);
+          if (workspaceBefore && session.hostWorkspacePath === workspaceBefore)
+            session.hostWorkspacePath = session.agent.workspacePath;
           if (
-            session.mode === 'code' &&
+            (session.mode === 'code' ||
+              (session.mode === 'chat' && session.agent.workspaceExplicit)) &&
             session.hostWorkspacePath &&
             session.agent.settings.runtime?.workspaceMode !== 'isolated'
           ) {
@@ -1570,7 +1731,7 @@ function createAgentRuntime({
               .some((m) => m.role === 'user' && m.metadata?.kind !== 'context-update')
           )
             session.unadmittedInput = null;
-          finishAgentRun(session);
+          await finishAgentRun(session);
         }
       };
       if (options.background === true) {
@@ -1836,7 +1997,7 @@ function createAgentRuntime({
       }
     },
 
-    /** 设置工作区（Code 模式） */
+    /** 设置会话工作区 */
     listLocalWorkspaceDirectories: (directory) => api.workspaceListLocalDirectories(directory),
 
     async syncWorkspace(key) {
@@ -1852,25 +2013,210 @@ function createAgentRuntime({
     async setWorkspace(key, workspacePath, options = {}) {
       const session = sessions.get(key);
       if (!session) return { ok: false, error: `unknown session: ${key}` };
-      if (session.busy)
+      if (session.busy || session.rewinding || session.compacting || session.workspaceChanging)
         return { ok: false, error: 'Stop the running task before changing workspace' };
       if (!workspacePath && !options.create)
         return { ok: false, error: 'Workspace path is required' };
-      const workspace = await validateWorkspace(workspacePath, options);
-      if (!workspace.ok) return workspace;
-      if (session.busy) return { ok: false, error: 'Task started while selecting workspace' };
-      await session.agent.resetMinimalShell();
-      session.agent.workspacePath = workspace.path;
-      session.agent.codeWorkspacePath = workspace.path;
-      session.agent.cachedWorkspaceTree = workspace.tree;
-      session.hostWorkspacePath = workspace.hostPath;
-      api.webControlSetWorkDir(workspace.path);
-      if (session.mode === 'code') await api.codeSetLastWorkspace(workspace.path);
-      return { ok: true, workspacePath: workspace.path, hostPath: workspace.hostPath };
+      session.workspaceChanging = true;
+      try {
+        if (session.initializing) await session.initializing;
+        const workspace = await validateWorkspace(workspacePath, options);
+        if (!workspace.ok) return workspace;
+        if (session.busy || sessions.get(key) !== session)
+          return { ok: false, error: 'The conversation changed while selecting the workspace' };
+        const agent = session.agent;
+        await agent.resetMinimalShell();
+        if (sessions.get(key) !== session)
+          return { ok: false, error: 'The conversation was closed' };
+        const previous = {
+          workspacePath: agent.workspacePath,
+          codeWorkspacePath: agent.codeWorkspacePath,
+          workspaceName: agent.workspaceName,
+          cachedWorkspaceTree: agent.cachedWorkspaceTree,
+          workspaceExplicit: agent.workspaceExplicit,
+          hostWorkspacePath: agent.hostWorkspacePath,
+        };
+        Object.assign(agent, {
+          workspacePath: workspace.path,
+          codeWorkspacePath: session.mode === 'code' ? workspace.path : null,
+          workspaceName: workspace.path === previous.workspacePath ? previous.workspaceName : '',
+          cachedWorkspaceTree: workspace.tree,
+          ...(session.mode === 'chat' && {
+            workspaceExplicit: Boolean(workspacePath),
+            hostWorkspacePath: workspace.hostPath,
+          }),
+        });
+        try {
+          if (
+            session.mode === 'chat' &&
+            agent.contextManager.getHistoryMessages().some((m) => m.role === 'user')
+          )
+            await agent.saveToHistory({ strict: true });
+        } catch (error) {
+          Object.assign(agent, previous);
+          return { ok: false, error: error.message };
+        }
+        session.hostWorkspacePath = workspace.hostPath;
+        if (session.profile === 'default') {
+          api.webControlSetWorkDir(workspace.path);
+          if (session.mode === 'code') await api.codeSetLastWorkspace(workspace.path);
+        }
+        const changed = { workspacePath: workspace.path, hostPath: workspace.hostPath };
+        emit({ type: 'view-changed', key, workspace: changed });
+        return { ok: true, ...changed };
+      } finally {
+        session.workspaceChanging = false;
+      }
     },
 
     getStats,
     getSubscriptionUsage,
+    listArtifacts: (query) => artifacts?.list(query) ?? { items: [], next: null },
+    async manageHistory(action, input = {}) {
+      const {
+        MODES,
+        ID,
+        LIMIT,
+        encodeBackup,
+        decodeBackup,
+        exportRows,
+      } = require('./services/conversation-archive');
+      if (action === 'restore') {
+        const rows = await decodeBackup(input.text, input.password);
+        const restored = [];
+        const failed = [];
+        for (const { mode, data } of rows) {
+          const id = require('node:crypto').randomUUID();
+          const copy = { ...data, id, messagingId: id, updatedAt: new Date().toISOString() };
+          if (['running', 'queued', 'waiting_approval', 'waiting_tool_auth'].includes(copy.status))
+            copy.status = 'interrupted';
+          delete copy.workspacePath;
+          delete copy.workspaceName;
+          delete copy.hostWorkspacePath;
+          delete copy.workspaceExplicit;
+          let workspacePath = null,
+            result;
+          try {
+            if (mode === 'code') {
+              const workspace = await api.workspaceCreate({ fresh: true });
+              if (!workspace?.ok) throw new Error(workspace?.error || 'WORKSPACE_UNAVAILABLE');
+              workspacePath = workspace.path;
+              copy.workspacePath = workspacePath;
+              result = await api.codeSaveHistory(workspacePath, id, copy, { immediate: true });
+            } else {
+              const save = mode === 'babe' ? api.babeHistorySave : api.historySave;
+              result = await save(copy, { immediate: true });
+            }
+            if (!result?.ok) throw new Error(result?.error || 'HISTORY_SAVE_FAILED');
+          } catch (error) {
+            failed.push({ mode, id: data.id, error: error.message });
+            continue;
+          }
+          restored.push({ mode, id, workspacePath });
+          if (workspacePath) {
+            try {
+              await api.workspaceRetain(workspacePath, true);
+            } catch (error) {
+              console.warn('[history] Workspace retention failed:', error.message);
+            }
+          }
+        }
+        return { restored, failed };
+      }
+      const activeCode = [...sessions.values()]
+        .filter((session) => session.mode === 'code')
+        .map((session) => session.agent.workspacePath);
+      const roots = await api.codeListHistoryRoots();
+      const workspaces = [
+        ...new Set([
+          getSettings?.()?.codeMode?.lastWorkspace,
+          ...(Array.isArray(roots) ? roots : []),
+          ...activeCode,
+        ]),
+      ].filter(Boolean);
+      if (action === 'list') {
+        const groups = [
+          ['chat', null],
+          ['babe', null],
+          ...workspaces.map((workspacePath) => ['code', workspacePath]),
+        ];
+        const rows = (
+          await Promise.all(
+            groups.map(async ([mode, workspacePath]) =>
+              (await historyList(mode, workspacePath)).map((row) => ({
+                id: row.id,
+                mode,
+                workspacePath,
+                title: row.title,
+                ts: row.ts || Date.parse(row.updatedAt || '') || 0,
+              })),
+            ),
+          )
+        ).flat();
+        const query = String(input.query || '')
+          .slice(0, 200)
+          .trim()
+          .toLocaleLowerCase();
+        const offset = input.offset ?? 0;
+        if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('INVALID_HISTORY_PAGE');
+        const visible = rows
+          .filter(
+            (row) =>
+              ID.test(String(row.id || '')) &&
+              String(row.title || '')
+                .toLocaleLowerCase()
+                .includes(query),
+          )
+          .sort((a, b) => b.ts - a.ts);
+        return {
+          rows: visible.slice(offset, offset + 100),
+          total: visible.length,
+          next: offset + 100 < visible.length ? offset + 100 : null,
+        };
+      }
+      const refs = input.rows;
+      if (
+        !Array.isArray(refs) ||
+        !refs.length ||
+        refs.length > 200 ||
+        refs.some(
+          (row) =>
+            !MODES.has(row?.mode) ||
+            !ID.test(String(row?.id || '')) ||
+            (row.mode === 'code' && !workspaces.includes(row.workspacePath)),
+        )
+      )
+        throw new Error('INVALID_HISTORY_SELECTION');
+      if (action === 'delete') {
+        const result = [];
+        for (const { mode, id, workspacePath } of refs) {
+          try {
+            const deleted = await this.deleteHistory(mode, id, workspacePath);
+            result.push({ id, ok: Boolean(deleted?.ok), error: deleted?.error });
+          } catch (error) {
+            result.push({ id, ok: false, error: error.message });
+          }
+        }
+        return { deleted: result };
+      }
+      if (!['backup', 'export'].includes(action)) throw new Error('UNKNOWN_HISTORY_ACTION');
+      let size = 0;
+      const rows = [];
+      for (const { mode, id, workspacePath } of refs) {
+        const data = await historyGet(mode, id, workspacePath);
+        if (!data || data.ok === false || !Array.isArray(data.messages))
+          throw new Error('HISTORY_ITEM_UNAVAILABLE');
+        size += Buffer.byteLength(JSON.stringify(data));
+        if (size > LIMIT) throw new Error('CONVERSATION_ARCHIVE_SIZE');
+        rows.push({ mode, data: { ...data, id } });
+      }
+      return {
+        text:
+          action === 'backup'
+            ? await encodeBackup(rows, input.password)
+            : exportRows(rows, input.format),
+      };
+    },
     // ------------------------------------------------------------- 历史接口
 
     listHistory: (mode, workspacePath) => historyList(mode || 'chat', workspacePath),
@@ -1897,7 +2243,7 @@ function createAgentRuntime({
      */
     async openHistory(key, id) {
       const session = createSession({ key, mode: 'chat' });
-      if (session.busy)
+      if (session.busy || session.workspaceChanging)
         return { ok: false, error: 'Stop the running task before replacing its conversation' };
       session.busy = true;
       session.loadingHistory = true;
@@ -1909,8 +2255,12 @@ function createAgentRuntime({
         await ensureInitialized(session);
         if (session.stopRequested) return { ok: false, error: 'Conversation loading cancelled' };
         await session.agent.loadFromHistory(conv);
+        if (session.mode === 'chat') session.hostWorkspacePath = session.agent.hostWorkspacePath;
         session.title = conv.title || '';
+        session.status = session.agent.sessionStatus;
+        session.lastError = session.agent.sessionLastError;
         emit({ type: 'title', key: session.key, title: session.title });
+        emit({ type: 'status', key: session.key, status: session.status });
         return {
           ok: true,
           id: conv.id || id,
@@ -1960,7 +2310,7 @@ function createAgentRuntime({
         session.lastError = error.message;
         emit({ type: 'message', key: session.key, role: 'system', content: error.message });
       } finally {
-        finishAgentRun(session);
+        await finishAgentRun(session);
       }
     };
     void run();
@@ -1999,9 +2349,26 @@ function createAgentRuntime({
     const walletStopped = runtime.walletService?.dispose();
     runtime.firmwareService?.dispose();
     unsubscribeProactive();
-    for (const session of sessions.values()) runtime.stop(session.key);
+    for (const session of sessions.values()) if (session.busy) runtime.stop(session.key);
     return Promise.allSettled([walletStopped, superStopped]);
   };
+  runtime.persistInterruptedSessions = () =>
+    Promise.allSettled(
+      [...sessions.values()]
+        .filter(
+          (session) =>
+            session.busy &&
+            session.stopRequested &&
+            session.agent.contextManager
+              .getHistoryMessages()
+              .some((message) => message.role === 'user'),
+        )
+        .map((session) => {
+          session.agent.sessionStatus = 'interrupted';
+          session.agent.sessionLastError = session.lastError;
+          return session.agent.saveToHistory({ strict: true });
+        }),
+    );
   return runtime;
 }
 

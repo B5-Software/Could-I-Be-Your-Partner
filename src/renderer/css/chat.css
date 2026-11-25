@@ -956,6 +956,119 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
 }
 
 /* 「回到底部」浮动按钮（Chat/Code/Babe 通用，位置由 JS 计算） */
+.tool-call-disclosure,
+.tool-call-group {
+  display: none;
+}
+
+.request-jump-anchor {
+  position: relative;
+}
+
+.request-jump {
+  position: absolute;
+  inset-inline-start: 3px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  inline-size: 24px;
+  pointer-events: none;
+}
+
+.request-jump[hidden],
+.request-jump-preview[hidden] {
+  display: none;
+}
+
+.request-jump-stops {
+  position: relative;
+  max-block-size: 100%;
+  inline-size: 100%;
+  overflow: auto;
+  scrollbar-width: none;
+  pointer-events: auto;
+}
+
+.request-jump-stop {
+  display: flex;
+  align-items: center;
+  inline-size: 100%;
+  block-size: 12px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.request-jump-stop::before {
+  content: '';
+  inline-size: 7px;
+  block-size: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text-primary) 28%, transparent);
+}
+
+.request-jump-stop:is(:hover, :focus-visible)::before {
+  inline-size: 14px;
+  background: var(--text-secondary);
+}
+
+.request-jump-stop[aria-current='true']::before {
+  inline-size: 19px;
+  block-size: 3px;
+  background: var(--accent);
+}
+
+.request-jump-stop:focus-visible {
+  outline-offset: -2px;
+}
+
+.request-jump-preview {
+  position: absolute;
+  inset-inline-start: calc(100% + 7px);
+  width: min(310px, 66vw);
+  padding: 9px 11px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  box-shadow: 0 8px 24px #0002;
+  color: var(--text-primary);
+  box-sizing: border-box;
+}
+
+.request-jump-preview strong,
+.request-jump-preview p {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-line-clamp: 2;
+}
+
+.request-jump-preview p:not([hidden]) {
+  margin-top: 5px;
+  color: var(--text-secondary);
+  -webkit-line-clamp: 3;
+}
+
+.request-jump-preview p[hidden] {
+  display: none;
+}
+
+.request-jump:not([hidden]) + #code-chat-messages {
+  padding-inline-start: 24px;
+}
+
+@media (max-width: 900px) {
+  .request-jump:not([hidden]) + :is(#chat-messages, #babe-chat-messages) {
+    padding-inline-start: 24px;
+  }
+}
+
 .scroll-to-bottom-btn {
   position: fixed;
   z-index: 60;
@@ -1013,6 +1126,7 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
 .reasoning-section.collapsed .reasoning-toggle-icon { transform: rotate(-90deg); }
 .reasoning-section.collapsed .reasoning-content { display: none; }
 .reasoning-content {
+  overflow-anchor: none;
   padding: 8px 12px;
   font-size: 0.9em;
   color: var(--text-secondary, #888);
@@ -3076,3 +3190,13 @@ html[data-animations="off"] .code-eslint-panel { transition: none; }
 .remote-device-write { display: flex; align-items: center; gap: 8px; }
 #remote-device-credentials { box-sizing: border-box; width: 100%; margin-top: 12px; font-family: monospace; }
 @media (max-width: 640px) { .remote-device-grant { grid-template-columns: 1fr; } }
+/* Structured results use a fixed, isolated renderer. */
+.interactive-content {
+  margin: 8px 0 14px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+}

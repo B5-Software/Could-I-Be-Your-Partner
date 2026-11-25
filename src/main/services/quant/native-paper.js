@@ -294,6 +294,7 @@ class NativePaper {
         this.changed(id);
         return result;
       } catch (error) {
+        let cleared = false;
         if (error.definitive) {
           let healthy = false;
           try {
@@ -301,10 +302,15 @@ class NativePaper {
           } catch {
             /* Preserve the pending receipt when health cannot be established. */
           }
-          if (healthy) await clearPending();
+          if (healthy) {
+            await clearPending();
+            cleared = true;
+          }
         }
-        error.orderId = orderId;
         this.changed(id);
+        if (error.definitive && error.code === 'POST_ONLY_WOULD_CROSS')
+          return { ok: false, error: error.code, orderId, reconcileRequired: !cleared };
+        error.orderId = orderId;
         throw error;
       }
     }

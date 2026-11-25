@@ -350,6 +350,14 @@ export interface QuantChatView {
   }[];
   messages?: { metadata?: { messageId?: string; kind?: string } }[];
   pendingInteraction?: QuantQuestionnaire | null;
+  activeStream?: {
+    requestId?: string | null;
+    content: string;
+    reasoning: string;
+    reasoningKind?: string;
+    finalized?: boolean;
+  } | null;
+  unadmittedInput?: { text: string; createdAt?: number } | null;
 }
 export interface QuantNativeStatus {
   available: boolean;

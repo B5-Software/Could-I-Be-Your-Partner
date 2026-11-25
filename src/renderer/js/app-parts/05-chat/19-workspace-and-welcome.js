@@ -16,6 +16,44 @@
     });
   }
 
+  const chooseChatWorkspace = document.getElementById('btn-choose-chat-workspace');
+  async function selectChatWorkspace() {
+    if (chooseChatWorkspace?.disabled) return;
+    const target = sessionManager?.getActive('chat')?.agent || agent;
+    if (chooseChatWorkspace) chooseChatWorkspace.disabled = true;
+    try {
+      await target._ensureBackend();
+      const { request, hydrate } = window.CibypBackendViews;
+      const key = target.backendKey;
+      const view = await request('getView', key);
+      if (view.session.busy) throw new Error(t('ui.workspace.chatBusy', '请先停止当前任务，再更换工作目录'));
+      const picked = await window.api.openFileDialog({
+        directory: true,
+        hostDirectory: true,
+        defaultPath: view.session.hostWorkspacePath ||
+          (target.settings?.runtime?.location !== 'vm' ? view.session.workspacePath : undefined),
+        title: t('ui.workspace.chooseChat', '选择 Chat 工作目录'),
+      });
+      if (!picked?.ok || !picked.paths?.[0]) {
+        if (picked?.error) throw new Error(picked.error);
+        return;
+      }
+      const result = await request('setWorkspace', key, picked.paths[0], { local: true });
+      if (!result.ok) throw new Error(result.error);
+      const updated = await request('getView', key);
+      if (updated?.session && !target._backendClosed) hydrate(target, updated);
+      window.CibypFrontendShell?.refresh();
+      showToast(t('ui.workspace.chatSelected', '当前 Chat 工作目录已设为 {path}', {
+        path: result.hostPath || result.workspacePath,
+      }), 'success');
+    } finally {
+      if (chooseChatWorkspace) chooseChatWorkspace.disabled = false;
+    }
+  }
+  chooseChatWorkspace?.addEventListener('click', () => {
+    void selectChatWorkspace().catch(error => showToast(error.message, 'error'));
+  });
+
   // 统一的 Chat 欢迎消息渲染：根据生图模型配置决定是否显示"生成图片"按钮
   function renderChatWelcome() {
     const imgConfigured = !!(agent.settings?.imageGen?.apiUrl && agent.settings?.imageGen?.model);

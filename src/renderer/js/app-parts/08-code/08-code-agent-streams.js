@@ -40,6 +40,52 @@
     }
   }
 
+  function clearCodeStreamBubble() {
+    if (codeStreamBubble?.renderTimer) clearTimeout(codeStreamBubble.renderTimer);
+    codeStreamBubble = null;
+  }
+
+  function restoreCodeStreamBubble(stream) {
+    if (!stream || (!stream.requestId && !stream.content && !stream.reasoning)) return null;
+    clearCodeStreamBubble();
+    const bubble = createCodeStreamBubble();
+    if (!bubble) return null;
+    if (stream.requestId && bubble.el) {
+      bubble.el.setAttribute('data-stream-request', String(stream.requestId));
+    }
+    setReasoningLabel(bubble.reasoningSection, stream);
+    bubble.rawContent = stream.content || '';
+    bubble.rawReasoning = stream.reasoning || '';
+    bubble.contentStarted = Boolean(bubble.rawContent);
+    if (bubble.rawReasoning) {
+      bubble.reasoningSection.style.display = 'block';
+      if (stream.finalized) {
+        bubble.reasoningSection.classList.add('collapsed');
+        bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning);
+      } else {
+        bubble.reasoningSection.classList.remove('collapsed');
+        const rCursor = bubble.contentStarted ? '' : '<span class="streaming-cursor"></span>';
+        bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning) + rCursor;
+      }
+    }
+    if (bubble.rawContent) {
+      bubble.contentEl.innerHTML =
+        renderMarkdown(bubble.rawContent) + (stream.finalized ? '' : '<span class="streaming-cursor"></span>');
+    } else if (stream.finalized && bubble.rawReasoning) {
+      bubble.contentEl.style.display = 'none';
+      const timeEl = bubble.el.querySelector('.message-time');
+      if (timeEl) timeEl.style.display = 'none';
+    }
+    if (stream.finalized) {
+      window.CibypMessages?.bind(bubble.el, { mode: 'code', role: 'assistant', content: bubble.rawContent });
+      bubble.el.classList.remove('streaming');
+      codeStreamBubble = null;
+    } else {
+      codeStreamBubble = bubble;
+    }
+    return bubble;
+  }
+
   function wireCodeAgent(ag) {
     if (!ag) return;
     const isActive = () => {
@@ -80,12 +126,16 @@
           addCodeMessage('system', data);
           break;
         case 'stream-chunk': {
+          if (!codeStreamBubble || !codeStreamBubble.el?.isConnected) {
+            codeStreamBubble = createCodeStreamBubble();
+            if (codeStreamBubble?.el && data?.requestId) {
+              codeStreamBubble.el.setAttribute('data-stream-request', String(data.requestId));
+            }
+          }
           const bubble = codeStreamBubble;
           if (!bubble) return;
           if (data.content) {
-            const dedup = dedupAppendChunk(bubble.rawContent, bubble._lastChunk, data.content);
-            bubble.rawContent = dedup.raw;
-            bubble._lastChunk = dedup.lastChunk;
+            bubble.rawContent += data.content;
             bubble.contentStarted = true;
             bubble.contentEl.innerHTML = renderMarkdown(bubble.rawContent) + '<span class="streaming-cursor"></span>';
             if (bubble.rawReasoning) bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning);
@@ -95,34 +145,43 @@
             bubble.rawReasoning += data.reasoning;
             bubble.reasoningSection.style.display = 'block';
             const rCursor = bubble.contentStarted ? '' : '<span class="streaming-cursor"></span>';
-            bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning) + rCursor;
-            try { bubble.reasoningEl.scrollTop = bubble.reasoningEl.scrollHeight; } catch (_) {}
+            renderStreamingReasoning(bubble.reasoningEl, renderMarkdown(bubble.rawReasoning) + rCursor);
           }
           scrollChatToBottom(msgsEl);
           if (!bubble.renderTimer) {
             bubble.renderTimer = setTimeout(() => {
               bubble.renderTimer = null;
-              if (bubble.el.id) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
+              if (bubble.el?.isConnected && bubble.el.id) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
             }, 120);
           }
           break;
         }
         case 'stream-end': {
           const isAuthoritativeFinal = !!(data && typeof data === 'object' && data.content !== undefined);
-          const bubble = codeStreamBubble;
-          if (!bubble) {
-            if (isAuthoritativeFinal && data.requestId) {
+          if (!isAuthoritativeFinal) return;
+          let bubble = codeStreamBubble;
+          if (!bubble || !bubble.el?.isConnected) {
+            if (data.requestId) {
               const target = msgsEl.querySelector(`[data-stream-request="${cssEscape(data.requestId)}"]`);
               if (target) {
                 const body = target.querySelector('.message-content, .code-msg-content, .message-body');
                 const clean = String(data.content || '').trimEnd();
                 if (body && clean) body.innerHTML = renderMarkdown(clean);
+                target.classList.remove('streaming');
+                codeStreamBubble = null;
+                return;
               }
             }
+            const cleanFinal = String(data.content || '').trimEnd();
+            if (cleanFinal || data.reasoning) {
+              bubble = createCodeStreamBubble();
+              if (bubble?.el && data.requestId) bubble.el.setAttribute('data-stream-request', String(data.requestId));
+            }
+          }
+          if (!bubble) {
             codeStreamBubble = null;
             return;
           }
-          if (!isAuthoritativeFinal) return;
           if (bubble.renderTimer) { clearTimeout(bubble.renderTimer); bubble.renderTimer = null; }
           setReasoningLabel(bubble.reasoningSection, data);
           const hasReasoning = !!(data.reasoning || bubble.rawReasoning);
@@ -132,7 +191,6 @@
             bubble.reasoningSection.classList.add('collapsed');
             bubble.reasoningSection.style.display = 'block';
             bubble.reasoningEl.innerHTML = renderMarkdown(data.reasoning || bubble.rawReasoning);
-            try { bubble.reasoningEl.scrollTop = bubble.reasoningEl.scrollHeight; } catch (_) {}
           }
           if (hasContent) {
             bubble.contentEl.innerHTML = renderMarkdown(finalContent);
@@ -147,12 +205,13 @@
             break;
           }
           window.CibypMessages?.bind(bubble.el, {mode:'code', role:'assistant', content:finalContent});
-      bubble.el.classList.remove('streaming');
+          bubble.el.classList.remove('streaming');
           if (bubble.el.id) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
           codeStreamBubble = null;
           break;
         }
         case 'stream-start':
+          clearCodeStreamBubble();
           codeStreamBubble = createCodeStreamBubble();
           if (codeStreamBubble?.el && data?.requestId) {
             codeStreamBubble.el.setAttribute('data-stream-request', String(data.requestId));
@@ -162,7 +221,7 @@
           addCodeToolCall(data);
           break;
         case 'error':
-          addCodeMessage('system', `错误: ${data?.message || data}`);
+          showToast(data?.message || String(data), 'error');
           break;
         case 'approval':
           showCodeApprovalPanel(data.toolName, data.args);

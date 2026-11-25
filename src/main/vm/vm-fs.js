@@ -294,6 +294,16 @@ class VmFs {
   }
 
   /** fs:getFileInfo 语义 */
+  async presentableFile(filePath) {
+    try {
+      const stat = await this.stat(filePath);
+      if (!stat?.isFile) return { ok: false, error: 'A regular file is required' };
+      return { ok: true, size: stat.size, location: 'vm' };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  }
+
   async getFileInfo(filePath) {
     try {
       const buf = await this.readBuffer(filePath);
@@ -407,10 +417,27 @@ class VmFs {
 
   // ---------------------------------------------------------------- 搜索
 
+  _isBroadVmPath(vmPath) {
+    const clean = String(vmPath || '').replace(/\/+$/, '') || '/';
+    return ['/', '/home', '/root', '/usr', '/etc', '/var', '/opt', '/proc', '/sys', '/dev', '/mnt', '/media'].includes(clean) ||
+      /^\/home\/[^/]+$/.test(clean);
+  }
+
   /** fs:localSearch 语义（在 VM 内按文件名 glob/正则搜索，返回 VM 路径） */
   async localSearch(dirPath, pattern, options = {}) {
     try {
-      const { ignoreCase = true, maxResults = 200, fileOnly = false, dirOnly = false, regex = false, depth = -1 } = options;
+      if (typeof pattern !== 'string' || pattern.length > 4096)
+        return { ok: false, error: 'Invalid file search pattern' };
+      const {
+        ignoreCase = true,
+        maxResults = 200,
+        fileOnly = false,
+        dirOnly = false,
+        regex = false,
+        depth = -1,
+        includeIgnored = false,
+        restrictDiskScan = true,
+      } = options;
       const globToRegex = (glob) => glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
       let searchRegex;
       try {
@@ -419,9 +446,47 @@ class VmFs {
         return { ok: false, error: `Invalid ${regex ? 'regex' : 'glob'} pattern: ${e.message}` };
       }
       const vmDir = this.strictPath(dirPath);
-      const depthArg = depth >= 0 ? ` -maxdepth ${Number(depth) + 1}` : '';
+      if (restrictDiskScan && this._isBroadVmPath(vmDir)) {
+        return {
+          ok: false,
+          blocked: true,
+          error: '已开启「禁止全盘扫描」：不允许直接对系统根目录或用户主目录执行递归搜索。请先用 listDirectory 查看目录结构，再搜索具体小目录。',
+        };
+      }
+      const cap = Math.max(1, Math.min(2000, Math.floor(Number(maxResults)) || 200));
+      const depthArg = Number.isSafeInteger(Number(depth)) && depth >= 0
+        ? ' -maxdepth ' + (Number(depth) + 1)
+        : '';
       const typeArg = fileOnly ? ' -type f' : dirOnly ? ' -type d' : '';
-      const r = await this.exec(`find ${shellQuote(vmDir)} -mindepth 1${depthArg}${typeArg} -printf '%y\\t%p\\n' 2>/dev/null | head -${Math.max(1, Number(maxResults)) * 3}`, 60000);
+      const pruneArg = includeIgnored
+        ? ''
+        : " \\( -name node_modules -o -name .git -o -name dist -o -name build -o -name .cache -o -name __pycache__ -o -name .venv \\) -prune -o";
+      const nameFilter = !regex && pattern && !pattern.includes('/')
+        ? ` ${ignoreCase ? '-iname' : '-name'} ${shellQuote(pattern)}`
+        : '';
+      // JS regular expressions execute in the guest process, including costly
+      // patterns. The host only parses bounded matches received over SSH.
+      const filter = ' | node -e ' + shellQuote(
+        `const lines = require('node:readline').createInterface({ input: process.stdin });
+        const pattern = new RegExp(process.argv[1], process.argv[2]);
+        const limit = Number(process.argv[3]);
+        let count = 0;
+        lines.on('line', line => {
+          if (count >= limit) return;
+          const file = line.slice(line.indexOf('\\t') + 1);
+          if (!pattern.test(file.slice(file.lastIndexOf('/') + 1))) return;
+          count++;
+          process.stdout.write(line + '\\n', () => {
+            if (count === limit) process.exit(0);
+          });
+          if (count === limit) lines.pause();
+        });`
+      ) + ' ' + shellQuote(searchRegex.source) + ' ' + shellQuote(searchRegex.flags) + ' ' + cap;
+      const r = await this.exec(
+        `find ${shellQuote(vmDir)} -mindepth 1${depthArg}${pruneArg}${typeArg}${nameFilter} -printf '%y\\t%p\\n' 2>/dev/null${filter} | head -n ${cap}`,
+        60000,
+      );
+      if (!r.ok) return { ok: false, error: r.stderr || 'VM filename search failed' };
       const results = [];
       for (const line of r.stdout.split('\n')) {
         if (!line) continue;
@@ -429,12 +494,10 @@ class VmFs {
         if (!full) continue;
         if (fileOnly && type !== 'f') continue;
         if (dirOnly && type !== 'd') continue;
-        if (searchRegex.test(path.posix.basename(full))) {
-          results.push(full);
-          if (results.length >= maxResults) break;
-        }
+        results.push(full);
+        if (results.length >= cap) break;
       }
-      return { ok: true, results, count: results.length };
+      return { ok: true, results, count: results.length, truncated: results.length >= cap };
     } catch (e) {
       return { ok: false, error: '虚拟机搜索失败: ' + e.message };
     }
@@ -447,36 +510,70 @@ class VmFs {
   async searchInFiles(paths, pattern, options = {}) {
     try {
       if (!Array.isArray(paths) || paths.length === 0) return { ok: false, error: 'paths 参数必须是非空数组' };
-      if (!pattern || typeof pattern !== 'string') return { ok: false, error: 'pattern 参数必须是非空字符串' };
+      if (!pattern || typeof pattern !== 'string' || pattern.length > 4096)
+        return { ok: false, error: 'pattern 参数必须是长度不超过 4096 的非空字符串' };
       const {
-        ignoreCase = false, regex = false, maxResults = 200,
-        include = null, exclude = null, contextLines = 0, encoding = '',
+        ignoreCase = true,
+        isRegex = undefined,
+        regex = false,
+        maxResults = 500,
+        include = null,
+        exclude = null,
+        contextLines = 0,
+        includeIgnored = false,
+        restrictDiskScan = true,
       } = options;
+      const useRegex = isRegex !== undefined ? Boolean(isRegex) : Boolean(regex);
       const vmPaths = paths.map((p) => this.strictPath(p));
+      if (restrictDiskScan && vmPaths.some((p) => this._isBroadVmPath(p))) {
+        return {
+          ok: false,
+          blocked: true,
+          error: '已开启「禁止全盘扫描」：不允许直接对系统根目录或用户主目录执行递归搜索。请先用 listDirectory 查看目录结构，再搜索具体小目录。',
+        };
+      }
+      const cap = Math.max(1, Math.min(2000, Math.floor(Number(maxResults)) || 500));
       const args = ['grep', '-rIn', '--binary-files=without-match'];
+      if (!includeIgnored) {
+        for (const d of ['node_modules', '.git', 'dist', 'build', '.cache', '__pycache__', '.venv']) {
+          args.push(`--exclude-dir=${shellQuote(d)}`);
+        }
+      }
       if (ignoreCase) args.push('-i');
-      if (!regex) args.push('-F');
-      if (contextLines > 0) args.push(`-C${Number(contextLines)}`);
-      if (include) args.push(`--include=${shellQuote(include)}`);
-      if (exclude) args.push(`--exclude=${shellQuote(exclude)}`);
+      if (useRegex) args.push('-E');
+      else args.push('-F');
+      if (contextLines > 0) args.push(`-C${Math.min(10, Number(contextLines))}`);
+      if (include) {
+        for (const g of String(include).split(',').map((s) => s.trim()).filter(Boolean)) {
+          args.push(`--include=${shellQuote(g)}`);
+        }
+      }
+      if (exclude) {
+        for (const g of String(exclude).split(',').map((s) => s.trim()).filter(Boolean)) {
+          args.push(`--exclude=${shellQuote(g)}`);
+          args.push(`--exclude-dir=${shellQuote(g)}`);
+        }
+      }
       args.push('-e', shellQuote(pattern), ...vmPaths.map(shellQuote));
-      const cmd = `LC_ALL=C ${args.join(' ')} 2>/dev/null | head -${Math.max(1, Number(maxResults)) * (contextLines > 0 ? 8 : 2)}`;
-      const r = await this.exec(cmd, 120000);
+      const cmd = `LC_ALL=C ${args.join(' ')} 2>/dev/null | head -${cap * (contextLines > 0 ? 8 : 2)}`;
+      const r = await this.exec(cmd, 60000);
       const files = new Map();
       let totalMatches = 0;
       let current = null;
+      const clip = (s, n = 500) => (s.length > n ? s.slice(0, n) + '…' : s);
       for (const raw of r.stdout.split('\n')) {
         if (!raw) continue;
         if (raw === '--') { current = null; continue; }
         const m = /^([^:]+):(\d+):(.*)$/.exec(raw);
         const mc = /^([^-]+)-(\d+)-(.*)$/.exec(raw);
         if (m) {
+          if (totalMatches >= cap) break;
           const file = m[1];
           if (!files.has(file)) files.set(file, []);
-          const text = m[3];
+          const text = clip(m[3], 500);
           const idx = (() => {
             try {
-              const re = regex ? new RegExp(pattern, ignoreCase ? 'i' : '') : new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), ignoreCase ? 'i' : '');
+              const re = useRegex ? new RegExp(pattern, ignoreCase ? 'i' : '') : new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), ignoreCase ? 'i' : '');
               const mm = re.exec(text);
               return mm ? mm.index : 0;
             } catch { return 0; }
@@ -486,12 +583,21 @@ class VmFs {
           totalMatches++;
         } else if (mc && current && mc[1] === current.file) {
           const lineNo = parseInt(mc[2], 10);
-          if (lineNo < current.item.line) current.item.contextBefore.push(mc[3]);
-          else current.item.contextAfter.push(mc[3]);
+          if (lineNo < current.item.line) current.item.contextBefore.push(clip(mc[3], 300));
+          else current.item.contextAfter.push(clip(mc[3], 300));
         }
       }
-      const results = [...files.entries()].map(([file, matches]) => ({ file, matches }));
-      return { ok: true, results, totalMatches, filesWithMatches: results.length };
+      const matches = [...files.entries()].map(([file, list]) => ({ file, matches: list }));
+      const truncated = totalMatches >= cap;
+      return {
+        ok: true,
+        matches,
+        results: matches,
+        totalMatches,
+        filesWithMatches: matches.length,
+        truncated,
+        message: `找到 ${totalMatches} 处匹配（${matches.length} 个文件）${truncated ? '（已截断）' : ''}`,
+      };
     } catch (e) {
       return { ok: false, error: '虚拟机内容搜索失败: ' + e.message };
     }

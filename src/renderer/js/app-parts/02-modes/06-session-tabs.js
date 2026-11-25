@@ -37,6 +37,11 @@
       `;
       tab.addEventListener('click', (e) => {
         if (e.target.closest('.session-tab-close')) return;
+        const current = sessionManager.getActive(mode);
+        if (current?.key === session.key && currentMode === mode && current._renderedOnce) {
+          if (document.documentElement.dataset.frontend === 'v2') navigatePage(mode);
+          return;
+        }
         activateSession(mode, session.key);
         if (document.documentElement.dataset.frontend === 'v2') navigatePage(mode);
       });

@@ -233,7 +233,8 @@
     // Entropy settings
     const entropy = s.entropy || {};
     document.querySelectorAll('.entropy-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.source === (entropy.source || 'csprng')));
-    document.getElementById('entropy-trng-settings').style.display = entropy.source === 'trng' ? '' : 'none';
+    document.getElementById('entropy-trng-settings').style.display = entropy.source === 'trng' ||
+      entropy.pools?.some(pool => pool.hardware) ? '' : 'none';
     document.querySelectorAll('.trng-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === (entropy.trngMode || 'network')));
     document.getElementById('trng-network-settings').style.display = (entropy.trngMode || 'network') === 'network' ? '' : 'none';
     document.getElementById('trng-serial-settings').style.display = entropy.trngMode === 'serial' ? '' : 'none';

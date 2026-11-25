@@ -1,4 +1,68 @@
+  function clearChatStreamingBubbles() {
+    for (const bubble of streamingBubbles.values()) {
+      if (bubble?.renderTimer) clearTimeout(bubble.renderTimer);
+    }
+    streamingBubbles.clear();
+  }
+
+  function hasVisibleChatStreamBubble() {
+    for (const bubble of streamingBubbles.values()) {
+      if (bubble?.el?.isConnected && bubble.shown) return true;
+    }
+    return false;
+  }
+
+  function restoreChatStreamBubble(stream) {
+    if (!stream || (!stream.requestId && !stream.content && !stream.reasoning)) return null;
+    const reqId = stream.requestId || 'restored-' + Date.now();
+    startStreamingMessage(reqId);
+    const bubble = streamingBubbles.get(reqId);
+    if (!bubble) return null;
+    setReasoningLabel(bubble.reasoningEl, stream);
+    bubble.rawReasoning = stream.reasoning || '';
+    bubble.rawContent = stream.content || '';
+    bubble.contentStarted = Boolean(bubble.rawContent);
+    if (bubble.rawReasoning) {
+      bubble.reasoningEl.style.display = '';
+      bubble.reasoningShown = true;
+      if (stream.finalized) {
+        bubble.reasoningEl.classList.toggle('collapsed', Boolean(bubble.rawContent.trim()));
+        bubble.reasoningContentEl.innerHTML = renderMarkdown(bubble.rawReasoning);
+      } else {
+        bubble.reasoningEl.classList.remove('collapsed');
+        const cursor = bubble.contentStarted ? '' : '<span class="streaming-cursor"></span>';
+        bubble.reasoningContentEl.innerHTML = renderMarkdown(bubble.rawReasoning) + cursor;
+      }
+    }
+    if (bubble.rawContent) {
+      bubble.contentEl.innerHTML =
+        renderMarkdown(bubble.rawContent) + (stream.finalized ? '' : '<span class="streaming-cursor"></span>');
+    }
+    if (bubble.rawContent || bubble.rawReasoning) {
+      bubble.el.style.display = '';
+      bubble.shown = true;
+      removeThinkingIndicator();
+    }
+    if (stream.finalized) {
+      streamingBubbles.delete(reqId);
+      if (!bubble.rawContent.trim() && bubble.rawReasoning.trim()) {
+        if (bubble.contentEl) bubble.contentEl.style.display = 'none';
+        if (bubble.timeEl) bubble.timeEl.style.display = 'none';
+      }
+      window.CibypMessages?.bind(bubble.el, { mode: 'chat', role: 'assistant', content: bubble.rawContent });
+      bubble.el.classList.remove('streaming');
+    }
+    scrollChatToBottom();
+    return bubble;
+  }
+
   function startStreamingMessage(requestId) {
+    const existing = streamingBubbles.get(requestId);
+    if (existing) {
+      if (existing.renderTimer) clearTimeout(existing.renderTimer);
+      if (existing.el?.isConnected) return;
+      streamingBubbles.delete(requestId);
+    }
     // Remove welcome message if present
     const welcome = chatMessages.querySelector('.welcome-message');
     if (welcome) welcome.remove();
@@ -41,23 +105,13 @@
     });
   }
 
-  // 流式 chunk 去重辅助：只做绝对安全的去重（防同一份数据被消费两次），
-  // 不做"边界重叠剥离"——Babe 语气存在大量真实叠词，易误伤。
-  // 返回 { raw, lastChunk }
-  function dedupAppendChunk(raw, lastChunk, chunkContent) {
-    if (!chunkContent) return { raw, lastChunk };
-    // 连续重复 chunk（同一份数据被传输/消费两次）：丢弃
-    if (chunkContent === lastChunk) return { raw, lastChunk };
-    // 累积模式：chunk 包含此前全部已渲染文本（替换而非追加）
-    if (chunkContent.length > raw.length && chunkContent.startsWith(raw)) {
-      return { raw: chunkContent, lastChunk };
-    }
-    return { raw: raw + chunkContent, lastChunk: chunkContent };
-  }
-
   // Appends a chunk to the streaming bubble (throttled markdown re-render).
   function appendStreamChunk(requestId, chunk) {
-    const bubble = streamingBubbles.get(requestId);
+    let bubble = streamingBubbles.get(requestId);
+    if (!bubble || !bubble.el?.isConnected) {
+      startStreamingMessage(requestId);
+      bubble = streamingBubbles.get(requestId);
+    }
     if (!bubble) return;
     const chunkContent = typeof chunk === 'string' ? chunk : (chunk?.content || '');
     const chunkReasoning = typeof chunk === 'object' ? ReasoningData.presentation(chunk).reasoning : '';
@@ -72,9 +126,7 @@
       }
     }
     if (chunkContent) {
-      const dedup = dedupAppendChunk(bubble.rawContent, bubble._lastChunk, chunkContent);
-      bubble.rawContent = dedup.raw;
-      bubble._lastChunk = dedup.lastChunk;
+      bubble.rawContent += chunkContent;
       bubble.contentStarted = true; // 标记 final content 开始，停止 reasoning 光标
     }
     if (!bubble.shown) {
@@ -87,6 +139,7 @@
     if (!bubble.renderTimer) {
       bubble.renderTimer = setTimeout(() => {
         bubble.renderTimer = null;
+        if (!bubble.el?.isConnected) return;
         if (bubble.contentEl) {
           bubble.contentEl.innerHTML = bubble.rawContent
             ? renderMarkdown(bubble.rawContent) + '<span class="streaming-cursor"></span>'
@@ -95,11 +148,8 @@
         if (bubble.reasoningContentEl && bubble.rawReasoning) {
           // During streaming: show reasoning expanded (live)
           // 一旦 final content 开始，就移除 reasoning 的光标（思考已结束）
-          bubble.reasoningEl.classList.remove('collapsed');
           const reasoningCursor = bubble.contentStarted ? '' : '<span class="streaming-cursor"></span>';
-          bubble.reasoningContentEl.innerHTML = renderMarkdown(bubble.rawReasoning) + reasoningCursor;
-          // 自动滚屏：让最新 reasoning 文本可见
-          try { bubble.reasoningContentEl.scrollTop = bubble.reasoningContentEl.scrollHeight; } catch (_) {}
+          renderStreamingReasoning(bubble.reasoningContentEl, renderMarkdown(bubble.rawReasoning) + reasoningCursor);
         }
         scrollChatToBottom();
         // 远程镜像推送进一步降频：每 ~480ms 推送一次（每 4 次渲染推送 1 次）
@@ -117,21 +167,25 @@
 
   // Finalizes the streaming bubble: full markdown render, collapse reasoning.
   function finalizeStreamMessage(requestId, data) {
-    const bubble = streamingBubbles.get(requestId);
-    if (!bubble) return;
     // main.js 先广播的无 content 流结束信号：不固化，等待带权威 content 的结束（agent.js commit）。
     // 只有 data 携带 content（或为字符串内容）时才做最终固化，避免显示停留在流式累积的中间状态。
     const isAuthoritativeFinal = (typeof data === 'string')
       || !(data && typeof data === 'object')
       || data.content !== undefined;
     if (!isAuthoritativeFinal) return;
+    let bubble = streamingBubbles.get(requestId);
+    const fullContent = typeof data === 'object' ? (data?.content || '') : (typeof data === 'string' ? data : '');
+    const fullReasoning = typeof data === 'object' ? ReasoningData.presentation(data).reasoning : '';
+    if ((!bubble || !bubble.el?.isConnected) && (fullContent.trim() || fullReasoning.trim())) {
+      startStreamingMessage(requestId);
+      bubble = streamingBubbles.get(requestId);
+    }
+    if (!bubble) return;
     streamingBubbles.delete(requestId);
     if (bubble.renderTimer) {
       clearTimeout(bubble.renderTimer);
       bubble.renderTimer = null;
     }
-    const fullContent = typeof data === 'object' ? (data?.content || '') : (typeof data === 'string' ? data : '');
-    const fullReasoning = typeof data === 'object' ? ReasoningData.presentation(data).reasoning : '';
     setReasoningLabel(bubble.reasoningEl, data);
     const content = fullContent || bubble.rawContent;
     const reasoning = fullReasoning || bubble.rawReasoning;
@@ -175,7 +229,6 @@
       bubble.reasoningEl.classList.add('collapsed');
       bubble.reasoningContentEl.innerHTML = renderMarkdown(reasoning);
       // 即使折叠，也滚到底部，方便用户展开后看到最新内容
-      try { bubble.reasoningContentEl.scrollTop = bubble.reasoningContentEl.scrollHeight; } catch (_) {}
     }
     window.CibypMessages?.bind(bubble.el, {mode:'chat', role:'assistant', content:content});
       bubble.el.classList.remove('streaming');

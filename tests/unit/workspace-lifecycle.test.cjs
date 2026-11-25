@@ -22,6 +22,27 @@ function fixture(t) {
   };
   return { root, workspaces, service, create };
 }
+test('new empty workspaces use the chat title, disambiguate collisions, and skip files already in use', async (t) => {
+  const { service, create, workspaces } = fixture(t);
+  const initial = create('initial');
+  const titled = await service.rename(initial, 'Research notes', { beforeUse: true });
+  assert.equal(titled.path, path.join(workspaces, 'Research-notes'));
+  assert.equal(fs.existsSync(initial), false);
+  assert.equal(fs.lstatSync(titled.path).isSymbolicLink(), false);
+  const second = await service.rename(create('second'), 'Research notes', { beforeUse: true });
+  assert.match(path.basename(second.path), /^Research-notes-[a-f0-9]{6}$/);
+  const concurrent = await Promise.all(
+    ['concurrent-a', 'concurrent-b'].map((id) =>
+      service.rename(create(id), 'Simultaneous notes', { beforeUse: true }),
+    ),
+  );
+  assert.equal(new Set(concurrent.map((result) => result.path)).size, 2);
+  assert.ok(concurrent.every((result) => fs.existsSync(result.path)));
+  const linked = create('already-used');
+  fs.writeFileSync(path.join(linked, 'report.txt'), 'published artifact');
+  assert.equal((await service.rename(linked, 'Other title', { beforeUse: true })).ok, false);
+  assert.equal(fs.readFileSync(path.join(linked, 'report.txt'), 'utf8'), 'published artifact');
+});
 test('workspace physical renames keep stable paths readable across repeated names and restarts', async (t) => {
   const { service, create, root, workspaces } = fixture(t),
     stable = create('deadbeef01234567');
@@ -33,7 +54,7 @@ test('workspace physical renames keep stable paths readable across repeated name
   assert.equal(fs.readFileSync(path.join(stable, 'report.txt'), 'utf8'), 'artifact');
   assert.ok(fs.lstatSync(stable).isSymbolicLink());
   const second = await service.rename(stable, '预算规划');
-  assert.ok(!fs.existsSync(first.displayPath));
+  assert.equal(fs.readFileSync(path.join(first.displayPath, 'report.txt'), 'utf8'), 'artifact');
   fs.writeFileSync(path.join(stable, 'next.txt'), 'second');
   assert.equal(fs.readFileSync(path.join(second.displayPath, 'next.txt'), 'utf8'), 'second');
   const restart = new WorkspaceLifecycle({

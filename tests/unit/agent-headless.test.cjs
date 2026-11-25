@@ -209,6 +209,11 @@ test('an aborted stream ends as interrupted without restarting inference', async
   t.after(() => stream.resolve());
   const llmChat = llmScript([{ content: 'Unexpected fallback' }]);
   const handlers = baseHandlers({ llmChat });
+  const snapshots = [];
+  handlers.set('history:save', (_event, snapshot) => {
+    snapshots.push(snapshot);
+    return { ok: true };
+  });
   handlers.set('settings:get', () => ({
     ...SETTINGS,
     llm: { ...SETTINGS.llm, streamResponses: true },
@@ -226,13 +231,17 @@ test('an aborted stream ends as interrupted without restarting inference', async
   runtime.onEvent((event) => events.push(event));
   const pending = runtime.sendMessage(key, 'Start a streamed reply.');
   await started.promise;
+  assert.equal(snapshots.at(-1).status, 'running');
   assert.equal(runtime.stop(key).ok, true);
+  await runtime.persistInterruptedSessions();
+  assert.equal(snapshots.at(-1).status, 'interrupted');
   stream.reject(new Error('Request aborted'));
   assert.equal((await pending).ok, true);
   assert.equal(llmChat.calls.length, 0);
   assert.equal(runtime.getSession(key).status, 'interrupted');
   assert.equal(events.filter((event) => event.type === 'status').at(-1).status, 'interrupted');
   await runtime.close(key);
+  assert.equal(snapshots.at(-1).status, 'interrupted');
 });
 
 test('OpenCode v2 shell/write aliases use native routing, disabled settings and delegated scope', async () => {
@@ -471,7 +480,8 @@ test('Minimal uses editing, shell and workspace naming with a fixed prompt; shar
   assert.equal(llm.calls.length, 1, 'No title or tool-selection LLM calls');
   const call = llm.calls[0];
   assert.match(call.messages[0].content, /^You are a helpful software engineer assistant\./);
-  assert.match(call.messages[0].content, /call renameWorkspace/);
+  assert.match(call.messages[0].content, /use action=poll without repeating the command/);
+  assert.doesNotMatch(call.messages[0].content, /call renameWorkspace/);
   assert.deepEqual(
     call.options.tools.map((tool) => tool.function.name),
     ['bash', 'str_replace_editor', 'renameWorkspace'],
@@ -644,6 +654,77 @@ test('Code startup preserves the requested workspace and rejects changes during 
   runtime.sessions.get('code-workspace').busy = true;
   assert.equal((await runtime.setWorkspace('code-workspace', '/new')).ok, false);
   assert.equal((await runtime.openHistory('code-workspace', 'h1')).ok, false);
+});
+
+test('Chat keeps a selected workspace through initialization, tools and history reopening', async () => {
+  const handlers = baseHandlers({ llmChat: llmScript([{ content: 'Reply' }]) });
+  const selected = path.join(os.tmpdir(), 'Chosen Chat folder');
+  let saved;
+  handlers.set('workspace:rename', () => assert.fail('Explicit folders must retain their names'));
+  handlers.set('history:save', (_event, value) => {
+    saved = structuredClone(value);
+    return { ok: true };
+  });
+  handlers.set('history:get', () => saved);
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+  });
+  const { agent } = runtime.createSession({ key: 'custom-chat', mode: 'chat' });
+  assert.equal((await runtime.setWorkspace('custom-chat', selected, { local: true })).ok, true);
+  assert.equal((await runtime.sendMessage('custom-chat', 'Use my folder')).ok, true);
+  assert.equal(saved.workspacePath, selected);
+  assert.equal(saved.hostWorkspacePath, selected);
+  assert.equal(agent._scriptCwd(), selected);
+  assert.equal(agent.codeWorkspacePath, null);
+  const { id } = saved;
+  runtime.createSession({ key: 'reopened-chat', mode: 'chat' });
+  assert.equal((await runtime.openHistory('reopened-chat', id)).ok, true);
+  assert.equal(runtime.getSession('reopened-chat').workspacePath, selected);
+  assert.equal(runtime.getSession('reopened-chat').hostWorkspacePath, selected);
+});
+
+test('an image format rejection retries text once while preserving the image in history', async () => {
+  const calls = [],
+    events = [];
+  const image = 'data:image/png;base64,iVBORw0KGgo=';
+  const handlers = baseHandlers({
+    llmChat: (_event, messages) => {
+      calls.push(messages);
+      return calls.length === 1
+        ? {
+            ok: false,
+            kind: 'client',
+            status: 400,
+            retryable: false,
+            error: 'Unsupported image_url format',
+          }
+        : { ok: true, data: { choices: [{ message: { content: 'Text fallback worked' } }] } };
+    },
+  });
+  handlers.set('settings:get', () => ({
+    ...SETTINGS,
+    llm: { ...SETTINGS.llm, forceVision: true },
+  }));
+  handlers.set('fs:readFileBase64', () => ({ ok: true, data: image }));
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+  });
+  runtime.onEvent((event) => events.push(event));
+  const { agent } = runtime.createSession({ key: 'image-fixture', minimalMode: true });
+  await runtime.sendMessage('image-fixture', 'Look at this', [
+    { isImage: true, name: 'fixture.png', path: 'fixture.png' },
+  ]);
+  assert.equal(calls.length, 2);
+  assert.match(JSON.stringify(calls[0]), /data:image\/png/);
+  assert.doesNotMatch(JSON.stringify(calls[1]), /data:image\/png/);
+  const transcript = JSON.stringify(agent.contextManager.getHistoryMessages());
+  assert.ok(transcript.includes(image));
+  assert.doesNotMatch(transcript, /Unsupported image_url/);
+  assert.ok(
+    events.some((event) => event.type === 'notification' && event.notificationType === 'toast'),
+  );
 });
 
 test('Code file exports cannot trap later user messages in a completed Agent turn', async () => {

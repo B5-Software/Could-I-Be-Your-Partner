@@ -42,34 +42,66 @@ class TerminalCommand {
     if (typeof command !== 'string' || !command.trim())
       return { ok: false, error: 'command is required' };
     const marker = 'CIBYP_DONE_' + crypto.randomBytes(16).toString('hex');
+    const begin = marker + '_BEGIN';
+    const prefix = begin.slice(0, 16),
+      suffix = begin.slice(16);
     this.current = {
       marker,
       output: '',
       running: true,
       offset: 0,
       waiters: new Set(),
+      beginPattern: new RegExp(wrappedLiteral(begin)),
+      completionPattern: new RegExp(marker + ':(-?\\d+):' + marker + '_END'),
       wrappedPattern: wrappedCompletion(marker),
     };
     // Keep execution in the same shell (cd/export survive). The marker is emitted
     // after execution and cannot be confused with echoed input or shell prompts.
     let framed;
-    if (/powershell|pwsh/i.test(this.shellName))
+    if (/powershell|pwsh/i.test(this.shellName)) {
+      this.current.requiresBegin = true;
+      // $? after dot-sourcing is the script invocation status. Capture it
+      // inside the script so an unsuccessful native command stays visible.
+      const encoded = Buffer.from(command + '\n$__cibypSucceeded = $?', 'utf8').toString('base64');
       framed =
-        command +
-        "\r$cibypExit=if($?){0}elseif($LASTEXITCODE){$LASTEXITCODE}else{1}; [Console]::WriteLine(('" +
+        "[Console]::WriteLine(('" +
+        prefix +
+        "'+'" +
+        suffix +
+        "')); $global:LASTEXITCODE=0; " +
+        "try { . ([scriptblock]::Create([text.encoding]::UTF8.GetString([convert]::FromBase64String('" +
+        encoded +
+        "')))); $cibypExit=if($__cibypSucceeded){0}elseif($LASTEXITCODE){$LASTEXITCODE}else{1} " +
+        '} catch { $cibypExit=1; Write-Error -ErrorAction Continue $_ }; ' +
+        "[Console]::WriteLine(('" +
         marker +
         "'+':'+$cibypExit+':" +
         marker +
         "_END'))\r";
-    else if (/(?:^|[/\\])cmd(?:\.exe)?$/i.test(this.shellName))
+    } else if (/(?:^|[/\\])cmd(?:\.exe)?$/i.test(this.shellName))
       framed = command + '\r@echo ' + marker + ':%errorlevel%:' + marker + '_END\r';
     else if (/fish/i.test(this.shellName))
       framed =
-        command + "\nprintf '\\n%s:%s:%s\\n' '" + marker + "' $status '" + marker + "_END'\r";
+        "printf '%s%s\\n' '" +
+        prefix +
+        "' '" +
+        suffix +
+        "'; eval '" +
+        command.replace(/\\/g, '\\\\').replace(/'/g, "\\'") +
+        "'; printf '\\n%s:%s:%s\\n' '" +
+        marker +
+        "' $status '" +
+        marker +
+        "_END'\r";
     else
       framed =
-        command.replace(/\r?\n/g, '\n') +
-        "\nprintf '\\n%s:%s:%s\\n' '" +
+        "printf '%s%s\\n' '" +
+        prefix +
+        "' '" +
+        suffix +
+        "'; eval '" +
+        command.replace(/'/g, "'\\''") +
+        "'; printf '\\n%s:%s:%s\\n' '" +
         marker +
         '\' "$?" \'' +
         marker +
@@ -95,13 +127,24 @@ class TerminalCommand {
     }
     // Mask title updates without shifting raw offsets. CMD titles can contain
     // the expanded echo command before the actual marker has been printed.
-    const content = current.output.replace(OSC_PATTERN, (sequence) => ' '.repeat(sequence.length));
+    let content = current.output.replace(OSC_PATTERN, (sequence) => ' '.repeat(sequence.length));
+    if (!current.begun) {
+      const begins = current.beginPattern.exec(content);
+      if (begins) {
+        const end = begins.index + begins[0].length;
+        const newline = /^\r?\n/.exec(current.output.slice(end));
+        const from = end + (newline?.[0].length || 0);
+        current.output = current.output.slice(from);
+        current.offset = Math.max(0, current.offset - from);
+        current.begun = true;
+        content = content.slice(from);
+      }
+    }
     const plain = content.replace(CSI_PATTERN, '');
     // ConPTY can use cursor escapes instead of newlines. A complete random end
     // marker also prevents a split multi-digit exit code from finishing early.
-    const pattern = current.marker + ':(-?\\d+):' + current.marker + '_END';
-    let match = new RegExp(pattern).exec(plain);
-    let rawMatch = new RegExp(pattern).exec(content);
+    let match = current.completionPattern.exec(plain);
+    let rawMatch = current.completionPattern.exec(content);
     if (!match) {
       rawMatch = current.wrappedPattern.exec(content);
       match = rawMatch;
@@ -134,21 +177,22 @@ class TerminalCommand {
   async wait(timeoutMs = 10000) {
     const current = this.current;
     if (!current) return { ok: false, error: 'No command to poll' };
-    if (current.running)
+    const waitMs = Math.max(0, Math.min(120000, Number(timeoutMs) || 0));
+    if (current.running && waitMs)
       await new Promise((resolve) => {
         const finish = () => {
           clearTimeout(timer);
           current.waiters.delete(finish);
           resolve();
         };
-        const timer = setTimeout(finish, Math.max(1, Math.min(60000, Number(timeoutMs) || 10000)));
+        const timer = setTimeout(finish, waitMs);
         current.waiters.add(finish);
       });
-    const output = current.output
-      .slice(current.offset)
-      .replace(OSC_PATTERN, '')
-      .replace(CSI_PATTERN, '');
-    current.offset = current.output.length;
+    const canRead = current.begun || !current.requiresBegin;
+    const output = canRead
+      ? current.output.slice(current.offset).replace(OSC_PATTERN, '').replace(CSI_PATTERN, '')
+      : '';
+    if (canRead) current.offset = current.output.length;
     return {
       ok: !current.error && (current.running || current.exitCode === 0),
       output,

@@ -81,19 +81,14 @@
     if (!item || !item.id) return;
     const id = item.id;
     if (action === 'continue') {
-      stopVoicePlayback();
       const existing = sessionManager ? sessionManager.list('babe').find(s => String(s.id) === String(id)) : null;
       if (existing) {
-        babeAgent = existing.agent;
-        const conversation = await window.api.babeHistoryGet(id);
-        if (conversation) {
-          await babeAgent.loadFromHistory(conversation);
-          sessionManager.retag(existing, id);
-        }
-        activateSession('babe', existing.key);
-      } else {
-        await loadBabeConversation(id);
+        await activateSession('babe', existing.key);
+        document.querySelector('.nav-item[data-page="babe"]')?.click();
+        return;
       }
+      stopVoicePlayback();
+      await loadBabeConversation(id);
     } else if (action === 'export-json' || action === 'export-md') {
       const conv = await window.api.babeHistoryGet(id);
       if (!conv) {
@@ -129,23 +124,28 @@
 
   // 加载 Babe 历史
   async function loadBabeConversation(id) {
+    let session = sessionManager ? sessionManager.list('babe').find(s => String(s.id) === String(id)) : null;
+    if (session) {
+      babeCurrentHistoryId = id;
+      await activateSession('babe', session.key);
+      document.querySelector('.nav-item[data-page="babe"]')?.click();
+      return;
+    }
     const conversation = await window.api.babeHistoryGet(id);
     if (!conversation) {
       window.showMessageModal('找不到该对话', '错误', 'error');
       return;
     }
-    let session = sessionManager ? sessionManager.list('babe').find(s => String(s.id) === String(id)) : null;
-    if (!session) {
-      session = await createBabeSession();
-      if (!session) return;
-    }
+    session = await createBabeSession(false);
+    if (!session) return;
     babeAgent = session.agent;
     babeCurrentHistoryId = id;
     babeMessages = conversation.messages || [];
     await babeAgent.loadFromHistory(conversation);
-    sessionManager.retag(session, id);
-    activateSession('babe', session.key);
-    await replayBabeSession(session);
+    session.id = String(id);
+    session.title = conversation.title || session.title;
+    if (!window.CibypBackendViews) sessionManager.retag(session, id);
+    await activateSession('babe', session.key, { force: true });
     updateBabeAffection(babeAgent.babeAffection);
     // 切换到 Babe 页面
     document.querySelector('.nav-item[data-page="babe"]')?.click();

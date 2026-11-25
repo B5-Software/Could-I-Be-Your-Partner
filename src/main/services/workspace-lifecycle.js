@@ -32,6 +32,7 @@ class WorkspaceLifecycle {
       this.records = {};
     }
     this.locks = new Set();
+    this.renameTargets = new Set();
     this.busyPaths = busyPaths;
   }
   save() {
@@ -68,7 +69,10 @@ class WorkspaceLifecycle {
   record(directory) {
     return (
       this.records[directory] ||
-      Object.values(this.records).find((r) => r.actual === directory || r.displayPath === directory)
+      Object.values(this.records).find(
+        (r) =>
+          r.actual === directory || r.displayPath === directory || r.aliases?.includes(directory),
+      )
     );
   }
   async adoptLegacy(historyDirectories = []) {
@@ -160,6 +164,40 @@ class WorkspaceLifecycle {
       return io.symlink(target, alias, process.platform === 'win32' ? 'junction' : 'dir');
     return io.symlink(target, alias);
   }
+  targetKey(directory) {
+    return process.platform === 'win32' ? directory.toLowerCase() : directory;
+  }
+  async reserveDestination(io, parser, from, name) {
+    const suffix = crypto.createHash('sha256').update(from).digest('hex').slice(0, 6);
+    for (const candidate of [name, name + '-' + suffix]) {
+      const destination = parser.join(parser.dirname(from), candidate);
+      const key = this.targetKey(destination);
+      if (this.renameTargets.has(key)) continue;
+      this.renameTargets.add(key);
+      try {
+        await io.lstat(destination);
+      } catch (error) {
+        if (['ENOENT', 2].includes(error.code)) return destination;
+        this.renameTargets.delete(key);
+        throw error;
+      }
+      this.renameTargets.delete(key);
+    }
+    throw new Error('A directory with this name already exists');
+  }
+  finishInitialName(record, destination, name) {
+    const previous = record.path;
+    delete this.records[previous];
+    record.path = destination;
+    record.actual = destination;
+    record.storage = destination;
+    if (record.hostPath === previous) record.hostPath = destination;
+    record.name = name;
+    record.displayPath = destination;
+    record.namedAt = Date.now();
+    delete record.pendingRename;
+    this.records[destination] = record;
+  }
   async recover() {
     for (const record of Object.values(this.records)) {
       const pending = record.pendingRename;
@@ -184,16 +222,26 @@ class WorkspaceLifecycle {
         }
         if (from && !from.isSymbolicLink())
           throw new Error('Workspace rename recovery found two storage directories');
+        if (pending.initial) {
+          if (from) throw new Error('Unexpected original path during workspace rename recovery');
+          this.finishInitialName(record, pending.to, pending.name);
+          this.save();
+          continue;
+        }
         try {
           await this.removeLink(io, record, stable);
         } catch (error) {
           if (!['ENOENT', 2].includes(error.code)) throw error;
         }
         await this.link(io, record, pending.to, stable);
+        if (pending.from !== stable) {
+          if (!from) await this.link(io, record, stable, pending.from);
+          record.aliases = [...new Set([...(record.aliases || []), pending.from])];
+        }
         record.actual = pending.to;
         record.displayPath = pending.to;
         record.name = pending.name;
-      } else if (destination?.isSymbolicLink()) {
+      } else if (destination?.isSymbolicLink() && !pending.initial) {
         // A busy Windows directory kept its original storage and a semantic alias.
         record.displayPath = pending.to;
         record.name = pending.name;
@@ -202,7 +250,7 @@ class WorkspaceLifecycle {
       this.save();
     }
   }
-  async rename(directory, value) {
+  async rename(directory, value, options = {}) {
     const record = this.record(directory);
     if (!record || !this.allowed(record, record.actual))
       return {
@@ -214,54 +262,36 @@ class WorkspaceLifecycle {
     if (this.locks.has(record.path)) throw new Error('Workspace is already being renamed');
     const name = workspaceName(value),
       parser = record.location === 'vm' ? path.posix : path;
+    if (options?.beforeUse === true) return this.nameEmptyDirectory(record, name, parser);
     if (record.name === name) return { ok: true, ...(await this.inspect(record.path)) };
     this.locks.add(record.path);
     let io;
     const old = record.actual,
       stable = record.storage || record.path;
-    const suffix = crypto.createHash('sha256').update(record.path).digest('hex').slice(0, 6);
-    const destination = parser.join(parser.dirname(old), name + '-' + suffix);
-    let moved = false,
-      newAlias = false;
+    let destination;
+    let moved = false;
+    let priorAliasCreated = false;
     const before = { ...record };
     try {
       io = await this.io(record);
-      try {
-        await io.lstat(destination);
-        throw new Error('A directory with this name already exists');
-      } catch (error) {
-        if (!['ENOENT', 2].includes(error.code)) throw error;
-      }
+      destination = await this.reserveDestination(io, parser, old, name);
       const stat = await io.lstat(old);
       if (stat.isSymbolicLink() || !stat.isDirectory())
         throw new Error('Workspace storage is not an owned directory');
-      // Stage a link at the new name first. If Windows has the directory locked,
-      // this useful semantic path remains available without moving live storage.
-      if (record.location === 'host')
-        await io.symlink(old, destination, process.platform === 'win32' ? 'junction' : 'dir');
-      else await io.symlink(old, destination);
-      newAlias = true;
-      await this.removeLink(io, record, destination);
-      newAlias = false;
       record.pendingRename = { from: old, to: destination, name };
       this.save(); // Durable intent closes the crash window between rename and alias creation.
-      try {
-        await io.rename(old, destination);
-        moved = true;
-      } catch (error) {
-        if (record.location !== 'host' || !['EBUSY', 'EPERM', 'EACCES'].includes(error.code))
-          throw error;
-        await io.symlink(old, destination, process.platform === 'win32' ? 'junction' : 'dir');
-        newAlias = true;
+      await io.rename(old, destination);
+      moved = true;
+      // The old path may already be in saved links and shell context.
+      if (old !== stable) await this.removeLink(io, record, stable);
+      await this.link(io, record, destination, stable);
+      if (old !== stable) {
+        // Previous file-manager paths stay resolvable across subsequent names.
+        await this.link(io, record, stable, old);
+        priorAliasCreated = true;
+        record.aliases = [...new Set([...(record.aliases || []), old])];
       }
-      if (moved) {
-        // Retarget the stable path after repeated renames, or create it once.
-        if (old !== stable) await this.removeLink(io, record, stable);
-        if (record.location === 'host')
-          await io.symlink(destination, stable, process.platform === 'win32' ? 'junction' : 'dir');
-        else await io.symlink(destination, stable);
-        record.actual = destination;
-      }
+      record.actual = destination;
       const staleDisplay = record.displayPath;
       record.name = name;
       record.displayPath = destination;
@@ -281,13 +311,14 @@ class WorkspaceLifecycle {
         name,
         displayPath: destination,
         actualPath: record.actual,
-        method: moved ? 'rename-with-stable-alias' : 'semantic-alias',
+        method: 'rename-with-stable-alias',
         note: 'Continue using the stable workspace path for tools and commands. The semantic path is shown by the file manager; no prompt prefix is rewritten.',
       };
     } catch (error) {
       let restored = true;
       if (moved) {
         try {
+          if (priorAliasCreated) await this.removeLink(io, record, old);
           await this.removeLink(io, record, stable);
         } catch {
           /* absent */
@@ -298,14 +329,9 @@ class WorkspaceLifecycle {
         } catch {
           restored = false;
         }
-      } else if (newAlias) {
-        try {
-          await this.removeLink(io, record, destination);
-        } catch {
-          /* absent */
-        }
       }
       delete record.pendingRename;
+      delete record.aliases;
       Object.assign(record, before);
       if (!restored) record.pendingRename = { from: old, to: destination, name };
       try {
@@ -315,7 +341,71 @@ class WorkspaceLifecycle {
       }
       throw error;
     } finally {
+      if (destination) this.renameTargets.delete(this.targetKey(destination));
       this.locks.delete(record.path);
+    }
+  }
+  async nameEmptyDirectory(record, name, parser) {
+    const old = record.path;
+    if (
+      record.hasChat ||
+      record.name ||
+      record.actual !== old ||
+      record.vmPath ||
+      record.pendingRename
+    )
+      return { ok: false, code: 'WORKSPACE_ALREADY_IN_USE' };
+    this.locks.add(old);
+    let io,
+      destination,
+      moved = false;
+    const before = { ...record };
+    try {
+      io = await this.io(record);
+      const stat = await io.lstat(old);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || (await io.readdir(old)).length)
+        return { ok: false, code: 'WORKSPACE_ALREADY_IN_USE' };
+      destination = await this.reserveDestination(io, parser, old, name);
+      record.pendingRename = { from: old, to: destination, name, initial: true };
+      this.save();
+      if (record.hasChat || (await io.readdir(old)).length)
+        throw new Error('Workspace already in use');
+      await io.rename(old, destination);
+      moved = true;
+      this.finishInitialName(record, destination, name);
+      this.save();
+      return {
+        ok: true,
+        method: 'initial-rename',
+        path: destination,
+        actualPath: destination,
+        displayPath: destination,
+        name,
+      };
+    } catch (error) {
+      const pending = moved ? { from: old, to: destination, name, initial: true } : null;
+      let rollbackFailed = false;
+      if (moved) {
+        try {
+          await io.rename(destination, old);
+        } catch {
+          rollbackFailed = true;
+        }
+      }
+      if (destination && this.records[destination] === record) delete this.records[destination];
+      delete record.pendingRename;
+      Object.assign(record, before);
+      if (rollbackFailed) record.pendingRename = pending;
+      this.records[old] = record;
+      try {
+        this.save();
+      } catch {
+        /* The durable intent is usable on restart. */
+      }
+      throw error;
+    } finally {
+      if (destination) this.renameTargets.delete(this.targetKey(destination));
+      this.locks.delete(old);
     }
   }
   async cleanup({ shutdown = false } = {}) {
@@ -384,7 +474,11 @@ class WorkspaceLifecycle {
         if (record.vmPath) await (await this.io({ location: 'vm' })).rmdir(record.vmPath);
         // rmdir is deliberately non-recursive and fails if a file appeared.
         await io.rmdir(record.actual);
-        for (const alias of new Set([record.storage || record.path, record.displayPath]))
+        for (const alias of new Set([
+          record.storage || record.path,
+          record.displayPath,
+          ...(record.aliases || []),
+        ]))
           if (alias && alias !== record.actual) {
             try {
               await this.removeLink(io, record, alias);

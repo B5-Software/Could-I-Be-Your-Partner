@@ -207,9 +207,16 @@ select {
   background: var(--bg-primary);
   color: var(--text-primary);
   outline: none;
-  min-width: 200px;
+  width: 200px;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   text-align: center;
   pointer-events: auto;
+}
+
+.titlebar-center :is(.titlebar-title, .titlebar-title-edit):focus-visible {
+  outline-offset: -2px;
 }
 
 .titlebar-controls {

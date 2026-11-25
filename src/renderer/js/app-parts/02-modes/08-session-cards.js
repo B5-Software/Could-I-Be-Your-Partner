@@ -65,21 +65,43 @@
     }
   }
 
+  function clearChatWorkTimer() {
+    if (window._workTimer) {
+      clearInterval(window._workTimer);
+      window._workTimer = null;
+    }
+    window._workStartTime = null;
+  }
+
   // 切回会话时同步发送/停止按钮与状态显示
   function syncSessionControls(mode, session) {
     const ag = session?.agent;
     if (mode === 'chat') {
+      clearChatWorkTimer();
       if (ag && ag.running) {
         if (typeof setSendButtons === 'function') setSendButtons(true);
         if (agentStatus) {
-          agentStatus.innerHTML = '<i class="fa-solid fa-circle"></i> 工作中...';
+          agentStatus.innerHTML = '<i class="fa-solid fa-circle"></i> 工作中... <span id="work-duration" style="margin-left:6px;font-variant-numeric:tabular-nums">00:00</span>';
           agentStatus.className = 'agent-status working';
+          window._workStartTime = ag._runStartedAt || session?.startedAt || Date.now();
+          const updateDur = () => {
+            const el = document.getElementById('work-duration');
+            if (!el || !window._workStartTime) return;
+            const sec = Math.max(0, Math.floor((Date.now() - window._workStartTime) / 1000));
+            const mm = String(Math.floor(sec / 60)).padStart(2, '0');
+            const ss = String(sec % 60).padStart(2, '0');
+            el.textContent = `${mm}:${ss}`;
+          };
+          updateDur();
+          window._workTimer = setInterval(updateDur, 1000);
         }
-        if (typeof addThinkingIndicator === 'function' && !document.getElementById('thinking-indicator')) {
+        const hasStream = typeof hasVisibleChatStreamBubble === 'function' && hasVisibleChatStreamBubble();
+        if (!hasStream && typeof addThinkingIndicator === 'function' && !document.getElementById('thinking-indicator')) {
           addThinkingIndicator();
         }
       } else {
         if (typeof setSendButtons === 'function') setSendButtons(false);
+        if (typeof removeThinkingIndicator === 'function') removeThinkingIndicator();
         if (agentStatus) {
           agentStatus.innerHTML = '<i class="fa-solid fa-circle"></i> 待命中';
           agentStatus.className = 'agent-status';
@@ -87,6 +109,7 @@
       }
       const att = session?.attention;
       if (att && agentStatus) {
+        clearChatWorkTimer();
         agentStatus.innerHTML = `<i class="fa-solid fa-circle"></i> ${escapeHtml(att.label || '等待处理')}`;
         agentStatus.className = 'agent-status working';
       }

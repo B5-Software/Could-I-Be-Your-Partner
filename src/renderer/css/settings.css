@@ -1170,3 +1170,63 @@ input[id^="setting-budget-peak-"][type="text"]:focus {
 .settings-panel[data-tab="network-privacy"] .toggle-switch {
   margin: 0;
 }
+.entropy-pool-toolbar,
+.entropy-pool-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+}
+
+.entropy-pool-toolbar + form {
+  margin-top: 14px;
+}
+
+.entropy-pool-inputs {
+  margin-bottom: 12px;
+}
+
+.entropy-pool-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+
+.entropy-pool-toggle:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.entropy-pool-sources {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(144px, 100%), 1fr));
+  gap: 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.entropy-pool-sources:empty {
+  display: none;
+}
+
+.entropy-pool-sources li {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border-color);
+  border-top: 3px solid var(--border-color);
+  border-radius: 8px;
+  padding: 9px;
+}
+
+.entropy-pool-sources li[data-used="true"] {
+  border-top-color: var(--accent);
+}
+
+.entropy-pool-sources small {
+  color: var(--text-secondary);
+}

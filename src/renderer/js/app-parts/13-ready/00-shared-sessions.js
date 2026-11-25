@@ -13,13 +13,17 @@
         if (record.mode === 'code') wireCodeAgent(view);
         else if (record.mode === 'babe') wireBabeAgent(view);
         else wireChatAgent(view);
-        local = sessionManager.registerAgent(record.mode, view, { key: record.key, title: record.title, createdAt: record.createdAt });
+        local = sessionManager.registerAgent(record.mode, view, { key: record.key, id: record.conversationId || undefined, title: record.title, createdAt: record.createdAt });
       } else window.CibypBackendViews.hydrate(local.agent, await window.api.backendRequest('getView', record.key));
-      local.status = record.status; local.title = record.title || local.title;
+      if (record.conversationId) local.id = String(record.conversationId);
+      if (record.busy) local.status = SessionStatus.RUNNING;
+      else if (record.status === 'error') local.status = SessionStatus.ERROR;
+      else if (record.status === 'interrupted') local.status = SessionStatus.INTERRUPTED;
+      local.title = record.title || local.title;
     }
     if (replay) {
       const active = sessionManager.getActive(currentMode) || sessionManager.list(currentMode).at(-1);
-      if (active) await activateSession(currentMode, active.key);
+      if (active) await activateSession(currentMode, active.key, { force: true });
     }
     renderAllSessionTabs();
   }

@@ -227,7 +227,14 @@ async function createNodeRuntime({
       });
     }
     const encoding = require('../main/file-encoding');
-    require('../main/ipc/files')({ ipcMain: registry, fs, path, ...encoding });
+    const files = require('../main/ipc/files')({
+      ipcMain: registry,
+      fs,
+      path,
+      ...encoding,
+      getSettings: () => settings,
+      searchWorkerEntry: __filename,
+    });
     bind('fs:saveUploadedFile', (name, data) => {
       name = path.basename(String(name || '')).replace(/[\x00-\x1f:*?"<>|]/g, '_');
       if (!name || name === '.' || name === '..' || name.length > 240)
@@ -345,7 +352,32 @@ async function createNodeRuntime({
     bind('skills:create', (value) => skills.create(value));
     bind('skills:update', (id, value) => skills.update(id, value));
     bind('skills:delete', (id) => skills.remove(id));
-    bind('tarot:draw', () => require('../main/tarot-tools').drawTarotCSPRNG());
+    const tarot = require('../main/tarot-tools');
+    const entropyPools = new (require('../main/services/entropy-pool').EntropyPools)({
+      getSettings,
+      hardware: tarot.getTrngDraw,
+    });
+    bind('tarot:draw', async (options) => {
+      const spread =
+        tarot.tarotSpreads.find((value) => value.id === options?.spread) || tarot.tarotSpreads[0];
+      let cards;
+      if (settings.entropy?.source === 'pool' && entropyPools.selection()) {
+        const mixed = await entropyPools.use(undefined, options?.context || '', (random) =>
+          tarot.drawTarotSpreadCSPRNG(spread.cardCount, random, 'Entropy pool'),
+        );
+        cards = mixed.result;
+      } else if (settings.entropy?.source === 'trng') {
+        cards = await tarot
+          .drawTarotSpreadTRNG(spread.cardCount, settings.entropy)
+          .catch(() => tarot.drawTarotSpreadCSPRNG(spread.cardCount));
+      } else cards = tarot.drawTarotSpreadCSPRNG(spread.cardCount);
+      return cards.length === 1
+        ? cards[0]
+        : {
+            spread,
+            cards: cards.map((card, index) => ({ ...card, position: spread.positions[index] })),
+          };
+    });
     const todo = new (require('../main/services/todo-service').TodoService)({
       file: file('todos'),
       changed: (value) => publish('todo:state', value),
@@ -549,7 +581,11 @@ async function createNodeRuntime({
       'deleteFile',
       'moveFile',
       'copyFile',
+      'presentFile',
+      'presentInteractive',
       'listDirectory',
+      'localSearch',
+      'searchInFiles',
       'makeDirectory',
       'deleteDirectory',
       'runShellScriptCode',
@@ -591,6 +627,7 @@ async function createNodeRuntime({
       api,
       eventBus,
       getSettings,
+      artifactFile: path.join(dataDir, 'presented-artifacts.jsonl'),
       decorateAgent(agent) {
         agent.usesToolDiscovery = () => false;
         const schemas = agent.getRuntimeToolSchemas.bind(agent),
@@ -610,7 +647,15 @@ async function createNodeRuntime({
             return { ok: false, error: 'Extension action declined' };
           if (agent._sandboxMode() !== 'danger-full-access') {
             const readOnly =
-              ['readFile', 'read', 'listDirectory', 'getFileEncodingInfo'].includes(name) ||
+              [
+                'readFile',
+                'read',
+                'listDirectory',
+                'getFileEncodingInfo',
+                'localSearch',
+                'searchInFiles',
+                'presentFile',
+              ].includes(name) ||
               (name === 'str_replace_editor' && args.command === 'view');
             if (
               agent._sandboxMode() === 'read-only' &&
@@ -622,10 +667,12 @@ async function createNodeRuntime({
               if (!record(value)) return;
               for (const [key, item] of Object.entries(value)) {
                 if (
-                  ['path', 'source', 'destination', 'filePath'].includes(key) &&
+                  ['path', 'source', 'destination', 'filePath', 'directory', 'cwd'].includes(key) &&
                   typeof item === 'string'
                 )
                   confinePath(agent.workspacePath, item);
+                else if (key === 'paths' && Array.isArray(item))
+                  item.forEach((entry) => confinePath(agent.workspacePath, entry));
                 else if (Array.isArray(item)) item.forEach(inspect);
                 else if (record(item)) inspect(item);
               }
@@ -640,6 +687,7 @@ async function createNodeRuntime({
         };
       },
     });
+    runtime.entropyPools = entropyPools;
     dispatch = createBackendDispatch({
       runtime,
       bridge,
@@ -701,6 +749,8 @@ async function createNodeRuntime({
         dispatch.remote.close();
         llmRetry.abortAllRequests();
         await runtime.dispose();
+        await runtime.persistInterruptedSessions();
+        files.dispose();
         await extensions.close();
         clearTimeout(decision._persistTimer);
         persistSettings();
@@ -753,3 +803,6 @@ async function createNodeRuntime({
   }
 }
 module.exports = { createNodeRuntime, merge, confinePath };
+
+if (require.main === module && process.send && process.argv[2] === '--cibyp-file-search-worker')
+  require('../main/services/file-search-worker').startWorker();

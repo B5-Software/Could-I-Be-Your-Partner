@@ -49,8 +49,7 @@ async function drawTarotTRNG(entropy = {}) {
 }
 
 // Draw N cards using CSPRNG, ensuring no duplicates
-function drawTarotSpreadCSPRNG(count) {
-  const crypto = require('crypto');
+function drawTarotSpreadCSPRNG(count, random = require('node:crypto').randomBytes, source = 'CSPRNG') {
   const range = tarotCards.length;
   const drawn = new Set();
   const cards = [];
@@ -58,20 +57,20 @@ function drawTarotSpreadCSPRNG(count) {
     const max = Math.floor(0x100000000 / range) * range;
     let val;
     do {
-      val = crypto.randomBytes(4).readUInt32BE(0);
+      val = random(4).readUInt32BE(0);
     } while (val >= max);
     const idx = val % range;
     if (drawn.has(idx)) continue;
     drawn.add(idx);
     const card = tarotCards[idx];
-    const isReversed = crypto.randomBytes(1)[0] < 128;
+    const isReversed = random(1)[0] < 128;
     cards.push({
       ...card,
       isReversed,
       orientation: isReversed ? 'reversed' : 'upright',
       meaningOfUpright: card.meaningOfUpright,
       meaningOfReversed: card.meaningOfReversed,
-      entropySource: 'CSPRNG',
+      entropySource: source,
     });
   }
   return cards;

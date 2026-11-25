@@ -263,6 +263,41 @@ function mergeFreeTierTools(tools, minimalMode = false) {
   return list;
 }
 
+function prepareWireMessages(messages, llm) {
+  const valid = (call) => typeof call?.id === 'string' && Boolean(call.id.trim()) &&
+    typeof call.function?.name === 'string' && Boolean(call.function.name.trim());
+  const dropped = new Set();
+  for (const message of messages) {
+    if (Array.isArray(message.tool_calls))
+      for (const call of message.tool_calls) if (!valid(call)) dropped.add(call?.id);
+  }
+  return messages.flatMap((message) => {
+    if (message.role === 'system' && message.metadata?.type === 'error') return [];
+    if (message.role === 'tool' && dropped.has(message.tool_call_id)) return [];
+    const out = { ...message };
+    if (out.providerReasoning?.source !== reasoningSource(llm)) delete out.providerReasoning;
+    if (Array.isArray(out.tool_calls)) {
+      out.tool_calls = out.tool_calls.filter(valid);
+      if (!out.tool_calls.length) {
+        delete out.tool_calls;
+        if (out.role === 'assistant' && !out.content) return [];
+      }
+    }
+    if (Array.isArray(out.content)) {
+      out.content = out.content.map((part) => {
+        if (!['image_url', 'input_image'].includes(part?.type)) return part;
+        const url = typeof part.image_url === 'string' ? part.image_url : part.image_url?.url;
+        if (typeof url === 'string' && /^(?:https?:\/\/\S+|data:image\/(?:png|jpeg|gif|webp);base64,[a-z\d+/]+={0,2})$/i.test(url))
+          return part.type === 'input_image'
+            ? { ...part, image_url: url }
+            : { ...part, image_url: typeof part.image_url === 'object' ? { ...part.image_url, url } : { url } };
+        return { type: 'text', text: '[This image could not be attached. The original file is still available in the conversation.]' };
+      });
+    }
+    return [out];
+  });
+}
+
 /**
  * Build the full request URL + headers + body for a given provider config.
  * @param {object} llm - settings.llm (with provider, apiUrl, apiKey, model, etc.)
@@ -273,11 +308,7 @@ function mergeFreeTierTools(tools, minimalMode = false) {
 function buildLLMRequest(llm, opts) {
   // Opaque state belongs to the exact configured provider/model/account. Never
   // forward it when model-pool routing changes that source.
-  opts = { ...opts, messages: (opts.messages || []).map((m) => {
-    const out = { ...m };
-    if (out.providerReasoning?.source !== reasoningSource(llm)) delete out.providerReasoning;
-    return out;
-  }) };
+  opts = { ...opts, messages: prepareWireMessages(opts.messages || [], llm) };
   const channelLimits = require('./opencode-models').getOpenCodeLimits(llm);
   if (channelLimits) llm = { ...llm, providerLimits: channelLimits };
   opts = { ...opts, max_tokens: require('../shared/token-policy').requestOutput({ llm }, opts) };

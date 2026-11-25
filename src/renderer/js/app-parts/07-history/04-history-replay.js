@@ -33,7 +33,7 @@
     return new Promise(resolve => setTimeout(resolve, 0));
   }
 
-  // 分块异步回放历史消息：每块处理完 yield 一次并刷新进度条。
+  // 分块异步回放历史消息：小历史直接同步完成消除闪动/竞态，大历史分块并 yield。
   // 返回 true 表示正常完成；返回 false 表示中途被取消（本次会话已切换）。
   async function replayHistoryMessages(messages, opts = {}) {
     const list = Array.isArray(messages) ? messages : [];
@@ -41,7 +41,8 @@
     const chunkSize = opts.chunkSize || 40; // 每批处理 40 条，避免长任务阻塞
     const cancelCheck = opts.cancelCheck || null; // 可选取消检查函数
     const toolCallMap = {};
-    if (total > 0) showHistoryProgress(total);
+    const needChunking = total > chunkSize;
+    if (needChunking) showHistoryProgress(total);
     let done = 0;
     try {
       for (let start = 0; start < total; start += chunkSize) {
@@ -77,31 +78,35 @@
             if (toolName === 'generateImage' && result && typeof result === 'object' && result.ok && result.url) {
               addImageMessage(result.url, { path: result.path });
             }
-          } else if (msg.role === 'system') {
+          } else if (msg.role === 'system' && msg.metadata?.type !== 'error') {
             // 回放历史时显示系统消息（不重复持久化）
             addSystemMessage(msg.content, { persist: false });
           }
           done++;
         }
-        // 每个 chunk 处理完都刷新进度，并让出事件循环（使模态框能更新、DOM 能回流）
-        const isLast = end >= total;
-        updateHistoryProgress(done, total, isLast ? '渲染完成，正在收尾…' : `已渲染 ${done}/${total} 条消息`);
-        await yieldHistoryUI();
+        if (needChunking) {
+          const isLast = end >= total;
+          updateHistoryProgress(done, total, isLast ? '渲染完成，正在收尾…' : `已渲染 ${done}/${total} 条消息`);
+          await yieldHistoryUI();
+        }
       }
+      if (cancelCheck && cancelCheck()) return false;
       return true;
     } finally {
-      hideHistoryProgress();
+      if (needChunking) hideHistoryProgress();
     }
   }
 
-  // 从历史会话重建 Chat UI（供 pending-resume 和其他场景使用）
-  // 注意：调用方应已调用 agent.loadFromHistory(conv) 同步状态
-  function rebuildChatUIFromHistory(conv) {
+  // 从历史会话重建 Chat UI（供会话切换、pending-resume 和其他场景使用）
+  // 返回 Promise<boolean>（true=完整完成，false=被新的切换取消）。
+  async function rebuildChatUIFromHistory(conv, opts = {}) {
     setTitlebarTitle(agent.conversationTitle || conv?.title || '未命名对话');
     updateContextProgress();
-    // 切换到 chat 页
-    navigatePage('chat');
-    // 清空并回放消息（异步分块渲染，避免长历史阻塞渲染器）
+    // 切换到 chat 页（可选跳过，例如后台预同步）
+    if (opts.navigate !== false) navigatePage('chat');
+    if (typeof clearChatStreamingBubbles === 'function') clearChatStreamingBubbles();
+    if (typeof clearSubAgentCards === 'function') clearSubAgentCards();
+    // 清空并回放消息
     chatMessages.innerHTML = '';
     if (typeof VirtualScroller !== 'undefined') VirtualScroller.reset();
     if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchStart();
@@ -109,38 +114,49 @@
       WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#chat-messages' });
       WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
     }
-    // 分块异步回放，不阻塞渲染器；完成后触发首屏渲染与滚动
-    // 每次启动回放递增 generation；其他入口（新会话/切换）也会递增以取消进行中的回放
     const chatGeneration = (window.__chatReplayGeneration = (window.__chatReplayGeneration || 0) + 1);
-    replayHistoryMessages(conv?.messages || [], {
-      cancelCheck: () => window.__chatReplayGeneration !== chatGeneration
-    }).then(finished => {
-      if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchEnd();
-      if (!finished) return;
-      if (!conv?.messages?.length && !conv?.subAgents?.length) renderChatWelcome();
-      // 重建子代理卡片：子代理聊天记录已持久化到历史，
-      // 恢复会话后仍可打开详情模态框查看完整对话。
-      if (conv?.subAgents && Array.isArray(conv.subAgents) && conv.subAgents.length > 0) {
-        for (const rec of conv.subAgents) {
-          if (!rec || !rec.id) continue;
-          addSubAgentCard({
-            id: rec.id,
-            title: rec.task ? `子代理：${String(rec.task).slice(0, 20)}` : '子代理',
-            task: rec.task || '',
-            startTime: rec.startTime || Date.now(),
-            status: rec.status || 'done'
-          });
-          updateSubAgentCard(rec.id, {
-            status: rec.status || 'done',
-            duration: (rec.endTime && rec.startTime) ? (rec.endTime - rec.startTime) : 0,
-            toolUseCount: rec.toolUseCount || 0,
-            usage: rec.usage || {},
-            result: rec.result || ''
-          });
-        }
-      }
-      if (typeof window.forceScrollToBottom === 'function') window.forceScrollToBottom(chatMessages);
+    const finished = await replayHistoryMessages(conv?.messages || [], {
+      cancelCheck: () => window.__chatReplayGeneration !== chatGeneration || (opts.cancelCheck ? opts.cancelCheck() : false)
     });
+    if (!finished) return false;
+    if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchEnd();
+
+    const hasLiveActivity = Boolean(
+      conv?.activeStream ||
+      conv?.unadmittedInput ||
+      opts.running
+    );
+    if (!conv?.messages?.length && !conv?.subAgents?.length && !hasLiveActivity) {
+      renderChatWelcome();
+    }
+    // 重建子代理卡片
+    if (conv?.subAgents && Array.isArray(conv.subAgents) && conv.subAgents.length > 0) {
+      for (const rec of conv.subAgents) {
+        if (!rec || !rec.id) continue;
+        addSubAgentCard({
+          id: rec.id,
+          title: rec.task ? `子代理：${String(rec.task).slice(0, 20)}` : '子代理',
+          task: rec.task || '',
+          startTime: rec.startTime || Date.now(),
+          status: rec.status || 'done'
+        });
+        updateSubAgentCard(rec.id, {
+          status: rec.status || 'done',
+          duration: (rec.endTime && rec.startTime) ? (rec.endTime - rec.startTime) : 0,
+          toolUseCount: rec.toolUseCount || 0,
+          usage: rec.usage || {},
+          result: rec.result || ''
+        });
+      }
+    }
+    if (conv?.unadmittedInput && (conv.unadmittedInput.text || conv.unadmittedInput.attachments?.length)) {
+      addMessageToChat('user', conv.unadmittedInput.text || '', conv.unadmittedInput.attachments || []);
+    }
+    if (conv?.activeStream && typeof restoreChatStreamBubble === 'function') {
+      restoreChatStreamBubble(conv.activeStream);
+    }
+    if (typeof window.forceScrollToBottom === 'function') window.forceScrollToBottom(chatMessages);
+    return true;
   }
 
   // Listen for language changes to update mode labels

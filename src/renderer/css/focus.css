@@ -1,18 +1,42 @@
 /* Shared keyboard focus for every App page, including standalone editors. */
-:root:not([data-focus-outlines="off"]) :is(button, [role="button"], a, input, textarea, select, summary, [tabindex]):focus {
+:root:not([data-focus-outlines="off"]) :is(button, [role="button"], a, summary, [tabindex], input[type="checkbox"], input[type="radio"], input[type="range"], input[type="color"]):focus {
   outline-color: var(--accent, var(--pcb-accent, #4f8cff)) !important;
 }
-:root:not([data-focus-outlines="off"]) :is(button, [role="button"], a, input, textarea, select, summary, [tabindex]):focus-visible {
+:root:not([data-focus-outlines="off"]) :is(button, [role="button"], a, summary, [tabindex], input[type="checkbox"], input[type="radio"], input[type="range"], input[type="color"]):focus-visible {
   outline: 2px solid var(--accent, var(--pcb-accent, #4f8cff)) !important;
   outline-offset: 2px;
 }
-:root:not([data-focus-outlines="off"]) :is(input, textarea, select):focus {
-  border-color: var(--accent, var(--pcb-accent, #4f8cff));
-}
-/* Composers already draw the focus boundary around their full input surface. */
-:is(#chat-input, #code-chat-input, #babe-chat-input, #chat-search-input, .monaco-editor textarea):focus {
+/* Text inputs, textareas and selects use a radius-conforming focus ring instead of an unrounded outline box. */
+:root:not([data-focus-outlines="off"]) :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]), textarea, select):focus {
   outline: none !important;
+  border-color: var(--accent, var(--pcb-accent, #4f8cff)) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, var(--pcb-accent, #4f8cff)) 26%, transparent);
+}
+/* Embedded transparent inputs delegate focus emphasis to their rounded outer container. */
+:is(
+  #chat-input,
+  #chat-search-input,
+  .chat-search-bar input,
+  .v2-cmd-input,
+  #v2-session-search,
+  .super-search-box input,
+  .super-composer > textarea,
+  #page-quant .quant-composer textarea,
+  html[data-frontend="v2"] #babe-chat-input,
+  .monaco-editor textarea
+):focus {
+  outline: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+:root:not([data-focus-outlines="off"]) :is(.input-wrapper, .chat-search-bar, .v2-session-search, .super-search-box, .super-composer, .quant-composer):focus-within {
+  border-color: var(--accent, var(--pcb-accent, #4f8cff));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, var(--pcb-accent, #4f8cff)) 24%, transparent);
 }
 :root[data-focus-outlines="off"] :is(button, [role="button"], a, input, textarea, select, summary, [tabindex]):focus {
   outline: none !important;
+  box-shadow: none !important;
+}
+:root[data-focus-outlines="off"] :is(.input-wrapper, .chat-search-bar, .v2-session-search, .v2-babe-composer, .v2-cmd-dialog, .super-search-box, .super-composer, .quant-composer):focus-within {
+  box-shadow: none !important;
 }

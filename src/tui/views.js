@@ -31,7 +31,7 @@ const {
   colorCode,
   charWidth,
 } = require('./ansi.js');
-const { brandLines } = require('../main/core/terminal-brand');
+const { brandLines, style3DLine } = require('../main/core/terminal-brand');
 const APP_VERSION = require('../../package.json').version.split('+')[0];
 const { selectionRange, highlightLine } = require('./selection');
 const { FIGURES, BOX } = require('./theme.js');
@@ -771,14 +771,24 @@ function composeFrame(state, opts) {
     visible.unshift('');
     rowLines.unshift(null);
   }
+  let scrollBottom;
   if (indicatorHeight > 0) {
+    const hint =
+      '  ↓ ' + t('ui.tui.scrolledHint', '{count} 行未显示（PgDn 查看）', { count: offset });
+    const button = ' ↓ ' + t('ui.tui.scrollBottom', '到底部') + ' ';
+    const buttonWidth = visibleWidth(button);
+    const clickable =
+      state.settings?.tui?.mouse !== false && !state.modal && width >= buttonWidth + 7;
+    const left = clickable ? width - buttonWidth - 1 : width;
+    const label = truncate(hint, left);
+    if (clickable)
+      scrollBottom = { row: visible.length + 1, from: left + 1, to: left + buttonWidth };
     visible.push(
-      paint(
-        theme,
-        'subtle',
-        '  ↓ ' + t('ui.tui.scrolledHint', '{count} 行未显示（PgDn 查看）', { count: offset }),
-        { dim: true },
-      ),
+      paint(theme, 'subtle', label, { dim: true }) +
+        (clickable
+          ? ' '.repeat(left - visibleWidth(label)) +
+            paint(theme, 'suggestion', button, { inverse: true })
+          : ''),
     );
   }
 
@@ -794,6 +804,7 @@ function composeFrame(state, opts) {
     lines,
     toastBounds,
     hits: {
+      scrollBottom,
       modal: modalHits.map((hit) => ({ ...hit, row: visible.length + hit.row })),
       modalBounds: { top: visible.length + 1, height: modalLines.length },
       completion: completionLines.slice(0, -1).map((_line, index) => ({
@@ -911,8 +922,13 @@ function composeBootFrame(theme, state, width, height) {
 }
 
 function renderBrand(theme, width, compact = false, mode = 'chat') {
-  return brandLines(Math.max(0, width - 4), compact).map(
-    (line) => '  ' + style(line, { fg: theme[accentFor(mode)], bold: true }),
+  const lines = brandLines(Math.max(0, width - 4), compact);
+  const face = colorCode(theme[accentFor(mode)]) + '\x1b[1m';
+  const shadow = colorCode(theme.secondaryBorder || theme.subtle || theme.muted);
+  return lines.map((line, idx) =>
+    line.includes('█')
+      ? '  ' + style3DLine(line, idx, face, shadow)
+      : '  ' + style(line, { fg: theme[accentFor(mode)], bold: true }),
   );
 }
 

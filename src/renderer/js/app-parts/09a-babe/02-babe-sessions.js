@@ -41,7 +41,7 @@
     }
   }
 
-  async function createBabeSession() {
+  async function createBabeSession(activate = true) {
     const ag = new Agent();
     ag.mode = 'babe';
     ag.settings = await window.api.getSettings();
@@ -59,32 +59,41 @@
     setupAgentStreamSubscriptions(ag, 'babe');
     if (!sessionManager) return null;
     const session = sessionManager.registerAgent('babe', ag, { title: '未命名 Babe 会话' });
-    activateSession('babe', session.key);
+    if (activate) activateSession('babe', session.key);
     return session;
   }
 
-  async function replayBabeSession(session) {
+  async function replayBabeSession(session, opts = {}) {
     const msgsEl = document.getElementById('babe-chat-messages');
-    if (!msgsEl || !session?.agent) return;
-    babeStreamBubble = null;
+    if (!msgsEl || !session?.agent) return false;
+    if (typeof clearBabeStreamBubble === 'function') clearBabeStreamBubble();
+    else babeStreamBubble = null;
     msgsEl.innerHTML = '';
     WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#babe-chat-messages' });
     const messages = session.agent.contextManager?.getHistoryMessages() || [];
-    if (messages.length === 0) {
+    const activeStream = session.agent._activeStream || null;
+    const unadmittedInput = session.agent._unadmittedInput || null;
+    const hasLive = Boolean(activeStream || unadmittedInput || session.agent.running);
+    const babeGeneration = (window.__babeReplayGeneration = (window.__babeReplayGeneration || 0) + 1);
+    const isCancelled = () =>
+      window.__babeReplayGeneration !== babeGeneration || (opts.cancelCheck ? opts.cancelCheck() : false);
+    if (messages.length === 0 && !hasLive) {
       msgsEl.innerHTML = `<div class="babe-welcome"><div class="babe-welcome-icon"><i class="fa-solid fa-heart"></i></div><h2>新的开始</h2><p>开始一段新的对话吧~</p></div>`;
       updateBabeAffection(session.agent.babeAffection);
-      return;
+      return true;
     }
     const total = messages.length;
     const chunkSize = 30;
     const toolCallMap = {};
-    showHistoryProgress(total);
+    const needChunking = total > chunkSize;
+    if (needChunking) showHistoryProgress(total);
     try {
       for (let start = 0; start < total; start += chunkSize) {
+        if (isCancelled()) return false;
         const end = Math.min(total, start + chunkSize);
         for (let i = start; i < end; i++) {
           const m = messages[i];
-          if (m.metadata?.kind === 'context-update') continue;
+          if (!m || m.metadata?.kind === 'context-update') continue;
           if (m.role === 'user') {
             addBabeMessage('user', m);
           } else if (m.role === 'assistant') {
@@ -112,25 +121,37 @@
               const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
               const ok = (result && typeof result === 'object') ? result.ok !== false : true;
               if (statusEl) {
-                statusEl.innerHTML = (ok ? '<i class="fa-solid fa-check"></i> 完成' : '<i class="fa-solid fa-xmark"></i> 失败')
+                statusEl.innerHTML = (ok ? '<i class="fa-solid fa-check"></i> 完成' : '<i class="fa-solid fa-xmark"></i> 失败') +
                   (resultStr ? `<pre class="tool-call-result">${escapeHtml(resultStr.slice(0, 800))}</pre>` : '');
               }
             } else {
               addBabeMessage('system', `[工具结果] ${m.name || 'tool'}: ${String(result).slice(0, 200)}`);
             }
-          } else if (m.role === 'system') {
+          } else if (m.role === 'system' && m.metadata?.type !== 'error') {
             addBabeMessage('system', typeof m.content === 'string' ? m.content : String(m.content || ''));
           }
         }
-        updateHistoryProgress(end, total, end >= total ? '渲染完成，正在收尾…' : `已渲染 ${end}/${total} 条消息`);
-        await yieldHistoryUI();
+        if (needChunking) {
+          updateHistoryProgress(end, total, end >= total ? '渲染完成，正在收尾…' : `已渲染 ${end}/${total} 条消息`);
+          await yieldHistoryUI();
+        }
+      }
+      if (isCancelled()) return false;
+      if (unadmittedInput && (unadmittedInput.text || unadmittedInput.attachments?.length)) {
+        addBabeMessage('user', unadmittedInput.text || '', unadmittedInput.attachments || []);
+      }
+      if (activeStream && typeof restoreBabeStreamBubble === 'function') {
+        restoreBabeStreamBubble(activeStream);
       }
     } finally {
-      hideHistoryProgress();
+      if (needChunking) hideHistoryProgress();
     }
     requestAnimationFrame(() => {
-      scrollChatToBottom(msgsEl);
+      if (isCancelled()) return;
+      if (typeof window.forceScrollToBottom === 'function') window.forceScrollToBottom(msgsEl);
+      else scrollChatToBottom(msgsEl);
       WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#babe-chat-messages', html: msgsEl.innerHTML });
     });
     updateBabeAffection(session.agent.babeAffection);
+    return true;
   }

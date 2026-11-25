@@ -99,6 +99,7 @@ export function openNativePaper(options: Options): void {
       HALT_CHANGED: 'npHaltChanged',
       ACCOUNT_SCOPE_CHANGED: 'npHaltChanged',
       LEDGER_PAUSED: 'npPaused',
+      POST_ONLY_WOULD_CROSS: 'npWouldCross',
     };
     n.textContent = messages[message] ? t(messages[message]!) : message;
     n.hidden = false;
@@ -418,7 +419,16 @@ export function openNativePaper(options: Options): void {
     if (orderPayload && payload !== orderPayload) orderOperation = crypto.randomUUID();
     orderPayload = payload;
     void run(async () => {
-      await call('submit', { ...data, operationId: orderOperation });
+      const result = await call<{ ok?: boolean; error?: string; reconcileRequired?: boolean }>(
+        'submit',
+        { ...data, operationId: orderOperation },
+      );
+      if (result.ok === false) {
+        if (result.reconcileRequired) throw new Error('NATIVE_RECONCILE_REQUIRED');
+        orderOperation = crypto.randomUUID();
+        orderPayload = '';
+        throw new Error(result.error);
+      }
       orderOperation = crypto.randomUUID();
       orderPayload = '';
     });

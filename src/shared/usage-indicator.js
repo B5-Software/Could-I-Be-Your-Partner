@@ -4,7 +4,7 @@ const LABELS = {
   'zh-CN': {
     unavailable: '额度不可用',
     managePlan:
-      '当前登录方式未提供可读取的订阅额度；请在 ChatGPT 用量管理中查看和调整。这不影响使用模型。',
+      '当前登录方式无法读取订阅额度，请到 ChatGPT 官网查看（不影响正常使用）。',
     remaining: '剩余',
     reset: '重置时间',
     '5hour': '5 小时',
@@ -12,14 +12,14 @@ const LABELS = {
     monthly: '每月',
     other: '额度',
     equivalent: 'API 等效',
-    reference: '今日 API 等效消费，仅供比较，不代表订阅扣费',
-    partial: '部分请求没有参考价格',
+    reference: '今日按 API 价目表估算的参考消费（非订阅实际扣费）',
+    partial: '部分请求未配置价格',
     api: '今日 API 消费',
   },
   en: {
     unavailable: 'Usage unavailable',
     managePlan:
-      'This login does not provide readable subscription limits. View and manage usage in ChatGPT; you can still use the models.',
+      'This login does not expose subscription limits. Check them on ChatGPT—models still work normally.',
     remaining: 'remaining',
     reset: 'Resets',
     '5hour': '5-hour',
@@ -27,14 +27,14 @@ const LABELS = {
     monthly: 'Monthly',
     other: 'Usage',
     equivalent: 'API equivalent',
-    reference: 'Today’s API equivalent estimate; not a subscription charge',
+    reference: 'Estimated API-equivalent cost for today (not a subscription charge)',
     partial: 'Some requests have no reference price',
     api: 'Today’s API spending',
   },
   de: {
     unavailable: 'Kontingent nicht verfügbar',
     managePlan:
-      'Diese Anmeldung stellt keine lesbaren Abonnementlimits bereit. Nutzung in ChatGPT ansehen und verwalten; die Modelle bleiben nutzbar.',
+      'Diese Anmeldung liefert keine Abo-Limits. Prüfe sie direkt bei ChatGPT – Modelle funktionieren weiter normal.',
     remaining: 'verbleibend',
     reset: 'Zurücksetzung',
     '5hour': '5 Stunden',
@@ -42,8 +42,8 @@ const LABELS = {
     monthly: 'Monatlich',
     other: 'Kontingent',
     equivalent: 'API-Vergleich',
-    reference: 'Heutiger API-Vergleichswert, keine Abrechnung des Abonnements',
-    partial: 'Für einige Anfragen fehlt ein Referenzpreis',
+    reference: 'Heutiger Schätzwert nach API-Preisen (nur zur Orientierung)',
+    partial: 'Für einige Anfragen fehlt ein Preis',
     api: 'Heutige API-Kosten',
   },
 };

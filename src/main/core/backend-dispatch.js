@@ -215,6 +215,35 @@ function createBackendDispatch({
     }
     if (method === 'superagent:request') return getSuperAgent().request(args[0], args[1]);
     if (method === 'quant:request') return getQuant().request(args[0], args[1]);
+    if (method === 'artifacts:list') return runtime.listArtifacts(args[0]);
+    if (method === 'history:manage') return runtime.manageHistory(args[0], args[1]);
+    if (method === 'entropy:request') {
+      const [action, input = {}] = args;
+      const service = runtime.entropyPools;
+      if (!service) throw new Error('ENTROPY_UNAVAILABLE');
+      if (action === 'status') return service.report(input.id);
+      if (action === 'test') return (await service.use(input.id, 'diagnostics', () => null)).report;
+      if (action === 'save') {
+        const pools = require('../services/entropy-pool').normalizedPools(input.pools);
+        if (!pools.some(({ id }) => id === input.activePoolId) && input.activePoolId)
+          throw new Error('INVALID_ACTIVE_ENTROPY_POOL');
+        const current = await runtime.getSettings();
+        return (
+          await runtime.saveSettings({
+            entropy: {
+              pools,
+              activePoolId: input.activePoolId || '',
+              source: input.activePoolId
+                ? 'pool'
+                : current.entropy?.source === 'pool'
+                  ? 'csprng'
+                  : current.entropy?.source,
+            },
+          })
+        ).entropy;
+      }
+      throw new Error('UNKNOWN_ENTROPY_ACTION');
+    }
     if (method === 'wallet:request') return getWallet().request(args[0], args[1]);
     if (method === 'snapshot')
       return {

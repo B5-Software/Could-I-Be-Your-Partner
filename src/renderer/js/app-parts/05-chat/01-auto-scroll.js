@@ -17,7 +17,7 @@
   function _ensureScrollState(container) {
     let st = _autoScrollStates.get(container);
     if (st) return st;
-    st = { stick: true, scheduled: false, lastProgrammaticAt: 0, btn: null, observer: null };
+    st = { stick: true, scheduled: false, lastProgrammaticAt: 0, lastTop: container.scrollTop, btn: null, observer: null };
     _autoScrollStates.set(container, st);
 
     const setStick = (value) => {
@@ -26,18 +26,25 @@
     };
 
     container.addEventListener('wheel', (e) => {
-      if (e.deltaY < 0 && !_containerAtBottom(container)) setStick(false);
+      if (e.deltaY < 0 && container.scrollHeight > container.clientHeight) setStick(false);
     }, { passive: true });
     container.addEventListener('touchmove', () => {
       if (!_containerAtBottom(container)) setStick(false);
     }, { passive: true });
     container.addEventListener('keydown', (e) => {
-      if ((e.key === 'PageUp' || e.key === 'ArrowUp' || e.key === 'Home') && !_containerAtBottom(container)) setStick(false);
+      if (['PageUp', 'ArrowUp', 'Home'].includes(e.key) && container.scrollHeight > container.clientHeight) setStick(false);
     });
     container.addEventListener('scroll', () => {
-      // 程序化滚动后的短窗口内忽略 scroll 事件，避免误清除吸附
+      const previous = st.lastTop;
+      st.lastTop = container.scrollTop;
+      if (st.lastTop < previous - 1) {
+        setStick(false);
+        return;
+      }
       if (Date.now() - st.lastProgrammaticAt < 180) return;
-      setStick(_containerAtBottom(container));
+      if (st.lastTop > previous && container.scrollHeight - st.lastTop - container.clientHeight <= 2)
+        setStick(true);
+      else if (st.stick && !_containerAtBottom(container)) setStick(false);
     }, { passive: true });
 
     const onGrow = () => {
@@ -63,6 +70,7 @@
       if (!st.stick) return;
       st.lastProgrammaticAt = Date.now();
       container.scrollTop = container.scrollHeight;
+      st.lastTop = container.scrollTop;
     });
   }
 
@@ -80,6 +88,7 @@
     st.stick = true;
     st.lastProgrammaticAt = Date.now();
     container.scrollTop = container.scrollHeight;
+    st.lastTop = container.scrollTop;
     if (st.btn) _updateScrollButton(st);
   }
 
@@ -150,6 +159,13 @@
 
   function scrollElementIntoView(el) {
     scrollChatToBottom(_scrollContainerOf(el));
+  }
+
+  function renderStreamingReasoning(element, html) {
+    const previous = element.scrollTop;
+    const follow = element.scrollHeight - previous - element.clientHeight <= 2;
+    element.innerHTML = html;
+    element.scrollTop = follow ? element.scrollHeight : previous;
   }
 
   _initAutoScrollTargets();

@@ -116,6 +116,7 @@
     const spacer = document.createElement('div');
     spacer.className = 'vsc-spacer';
     spacer.dataset.vscSpacerFor = '';
+    spacer.originalMessage = el;
     spacer.style.minHeight = Math.max(height, PLACEHOLDER_MIN_HEIGHT) + 'px';
     spacer.style.width = '100%';
     if (observer) observer.unobserve(el);
@@ -224,19 +225,29 @@
    */
   function markBatchEnd() {
     batchMode = false;
-    // 渲染当前可视区域内的所有消息
+    if (container) {
+      if (typeof window.forceScrollToBottom === 'function') window.forceScrollToBottom(container);
+      else container.scrollTop = container.scrollHeight;
+    }
     if (container && pendingRender.size > 0) {
-      for (const el of pendingRender) {
-        if (isElementInViewport(el, container)) {
+      const pendingList = [...pendingRender];
+      const tailStart = Math.max(0, pendingList.length - 10);
+      for (let i = 0; i < pendingList.length; i++) {
+        const el = pendingList[i];
+        if (i >= tailStart || isElementInViewport(el, container)) {
           renderMessageContent(el);
         }
       }
     }
     pendingRender.clear();
-    // 滚动到底部（批量恢复后强制回到底部并恢复吸附）
     if (container) {
       if (typeof window.forceScrollToBottom === 'function') window.forceScrollToBottom(container);
       else container.scrollTop = container.scrollHeight;
+      requestAnimationFrame(() => {
+        if (!container || !container.isConnected) return;
+        if (typeof window.forceScrollToBottom === 'function') window.forceScrollToBottom(container);
+        else container.scrollTop = container.scrollHeight;
+      });
     }
   }
 
@@ -260,6 +271,7 @@
    * 清理所有观察状态（切换会话时调用）
    */
   function reset() {
+    batchMode = false;
     if (observer) observer.disconnect();
     pendingRender.clear();
     // 恢复所有被回收的节点（替换回真实消息节点），保持 DOM 完整

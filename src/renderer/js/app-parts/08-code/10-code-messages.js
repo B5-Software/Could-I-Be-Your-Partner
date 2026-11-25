@@ -101,9 +101,11 @@
     div.id = 'code-tool-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
     if (data.callId) div.dataset.callId = data.callId;
     const argsStr = data.args ? JSON.stringify(data.args, null, 2).slice(0, 500) : '';
-    div.innerHTML = `<div class="tool-call-header"><i class="fa-solid fa-wrench"></i> <span>${escapeHtml(data.name || 'tool')}</span></div>` +
+    div.innerHTML = `<div class="tool-call-header"><i class="fa-solid fa-wrench"></i> <span>${escapeHtml(i18nGetToolDesc(data.name, data.name || t('ui.tools.unknown', '工具')))}</span></div>` +
       (argsStr ? `<pre class="tool-call-args">${escapeHtml(argsStr)}</pre>` : '') +
-      `<div class="tool-call-status"><i class="fa-solid fa-spinner fa-spin"></i> 执行中...</div>`;
+      `<div class="tool-call-status"><i class="fa-solid fa-spinner fa-spin"></i> ${escapeHtml(t('ui.tools.running', '执行中…'))}</div>`;
+    wireToolDisclosure(div);
+    rememberInteractiveData(div, data.args);
     msgsEl.appendChild(div);
     // 增量推送：工具调用卡片追加到 WebUI
     WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#code-chat-messages', html: div.outerHTML });
@@ -135,7 +137,9 @@
     if (!statusEl) return;
     const resultStr = typeof data.result === 'string' ? data.result : JSON.stringify(data.result);
     const ok = data.result?.ok !== false;
-    statusEl.innerHTML = (ok ? '<i class="fa-solid fa-check"></i> 完成' : '<i class="fa-solid fa-xmark"></i> 失败') +
+    markToolCard(targetCard, !ok);
+    statusEl.innerHTML = (ok ? '<i class="fa-solid fa-check"></i> ' : '<i class="fa-solid fa-xmark"></i> ') +
+      escapeHtml(ok ? t('ui.tools.completed', '完成') : t('ui.tools.failed', '失败')) +
       (resultStr ? `<pre class="tool-call-result">${escapeHtml(resultStr.slice(0, 800))}</pre>` : '');
     // 增量推送：更新工具调用卡片结果到 WebUI
     if (targetCard.id) {
@@ -143,6 +147,7 @@
     }
     // 结果注入会撑高卡片：吸附状态下补滚到底
     scrollChatToBottom(msgsEl);
+    renderInteractiveResult(targetCard, data.result);
   }
 
   function showCodeApprovalPanel(toolName, args) {

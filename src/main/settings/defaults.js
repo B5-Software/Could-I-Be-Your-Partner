@@ -57,6 +57,7 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
     agent: {
       iterationLimit: require('../../shared/agent-iterations').DEFAULT_ITERATIONS,
       autoCompactMaxFailures: 3,
+      restrictDiskScan: true,
     },
     // 上下文压缩（水位线策略，借鉴 DeepSeek Harness compaction-basic）
     // - enabled           : 自动压缩总开关
@@ -235,6 +236,8 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
     userProfile: { name: '', avatar: '', avatarFrame: '', bio: '' },
     entropy: {
       source: 'csprng',
+      pools: [],
+      activePoolId: '',
       trngMode: 'network',
       trngSerialPort: '',
       trngSerialBaud: 115200,

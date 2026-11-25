@@ -40,7 +40,7 @@
       const button = document.createElement('button'); button.type = 'button'; button.className = 'btn-icon message-delete-action';
       button.title = t(info.role === 'user' ? 'ui.messageEdit.deleteTurn' : 'ui.messageEdit.deleteMessage', info.role === 'user' ? '删除本轮对话' : '删除消息'); button.setAttribute('aria-label', button.title);
       button.setAttribute('data-i18n-title', info.role === 'user' ? 'ui.messageEdit.deleteTurn' : 'ui.messageEdit.deleteMessage'); button.setAttribute('data-i18n-aria-label', button.getAttribute('data-i18n-title'));
-      button.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></svg>';
+      button.innerHTML = '<i class="fa-solid fa-trash-can v2-original-icon" aria-hidden="true"></i><svg class="v2-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></svg>';
       button.disabled = !element.dataset.messageId;
       button.onclick = () => window.CibypMessages.remove({ mode: info.mode, ids: [element.dataset.messageId] }).catch(error => showToast(error.message, 'error'));
       controls.append(button); element.querySelector('.message-body, .babe-msg-body')?.append(controls);
@@ -65,6 +65,6 @@
     const button = document.createElement('button'); button.type = 'button'; button.className = 'btn-icon message-manager-trigger'; button.dataset.messageManager = mode;
     button.title = t('ui.messageEdit.title', '管理消息'); button.setAttribute('aria-label', button.title);
     button.setAttribute('data-i18n-title', 'ui.messageEdit.title'); button.setAttribute('data-i18n-aria-label', 'ui.messageEdit.title');
-    button.innerHTML = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11a7 7 0 0 1-7 7H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/><path d="M7 8h10M7 12h7"/></svg>';
+    button.innerHTML = '<i class="fa-solid fa-comment-dots v2-original-icon" aria-hidden="true"></i><svg class="v2-icon" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11a7 7 0 0 1-7 7H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/><path d="M7 8h10M7 12h7"/></svg>';
     button.onclick = () => window.CibypMessages.open({mode}).catch(error => showToast(error.message,'error')); toolbar.append(button);
   }

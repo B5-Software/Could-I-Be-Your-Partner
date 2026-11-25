@@ -389,7 +389,7 @@ class QuantBrowser {
                         ['npPrice', 'npQuantity'],
                         { npPrice: '', npQuantity: '' },
                         async (values) => {
-                          await this.call('native.paper.submit', {
+                          const result = await this.call('native.paper.submit', {
                             id,
                             operationId: require('node:crypto').randomUUID(),
                             product,
@@ -399,6 +399,10 @@ class QuantBrowser {
                             price: values.npPrice,
                             quantity: values.npQuantity,
                           });
+                          if (result.ok === false)
+                            throw new Error(
+                              this.text(result.reconcileRequired ? 'npUncertain' : 'npWouldCross'),
+                            );
                           return this.nativePaper(id);
                         },
                         () => this.nativePaper(id),

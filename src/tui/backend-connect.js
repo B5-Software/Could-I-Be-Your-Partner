@@ -3,13 +3,44 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { setTimeout: delay } = require('node:timers/promises');
+const { Agent, request } = require('undici');
 const { createAppPaths } = require('./electron-shim');
 const { readBackend } = require('../main/core/backend-discovery');
 const { BackendClient } = require('../shared/backend-client');
 
+const ownerDispatcher = new Agent({ connections: 8 });
+const retryableSocketErrors = new Set(['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'UND_ERR_SOCKET']);
+
+async function fetchOwner(url, options) {
+  // The owner uses a loopback socket and must never inherit the model/web proxy.
+  // Reuse the serialized RPC body, including its request ID, when a socket drops.
+  const { method, headers, body, signal } = options;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const { statusCode, body: response } = await request(url, {
+        method,
+        headers,
+        body,
+        signal,
+        dispatcher: ownerDispatcher,
+      });
+      const text = await response.text();
+      return { ok: statusCode >= 200 && statusCode < 300, status: statusCode, text: () => text };
+    } catch (error) {
+      if (signal?.aborted || attempt >= 2 || !retryableSocketErrors.has(error.code)) throw error;
+      await delay(100 * (attempt + 1), undefined, { signal });
+    }
+  }
+}
+
 function clientFor(address) {
+  const url = new URL(address.url);
+  if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1')
+    throw new Error('Invalid local backend address');
   return new BackendClient({
     ...address,
+    fetchImpl: fetchOwner,
     socketFactory: (url, token) =>
       new (require('ws'))(url, { headers: token ? { Authorization: 'Bearer ' + token } : {} }),
     onError: (error) => console.error('[backend]', error.message),

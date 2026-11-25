@@ -8,7 +8,8 @@
       if (!s.entropy) s.entropy = {};
       s.entropy.source = source;
       await saveSettings(s);
-      document.getElementById('entropy-trng-settings').style.display = source === 'trng' ? '' : 'none';
+      document.getElementById('entropy-trng-settings').style.display = source === 'trng' ||
+        s.entropy.pools?.some(pool => pool.hardware) ? '' : 'none';
     });
   });
 
